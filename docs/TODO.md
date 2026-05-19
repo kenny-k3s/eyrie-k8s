@@ -12,6 +12,9 @@ primary planning source and use this file for concrete follow-up tasks.
 
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
 **Design:** `project-design.pen` (Pencil mockups), implementation plans in `docs/PLAN.md` and `docs/plan-onboarding-flow.md`.
+**Codex runtime direction:** `docs/codex-runtime-direction.md` records the May
+2026 split: App Server for live Codex agents, `codex exec --json` for
+short-lived Eyrie-run talons.
 
 ## Unified Onboarding Flow (in progress)
 

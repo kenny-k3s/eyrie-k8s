@@ -113,6 +113,7 @@ Eyrie's config lives at `~/.eyrie/config.toml`. It's optional — Eyrie works ou
 [dashboard]
 port = 7200
 host = "127.0.0.1"
+open_browser = false  # set true to open the dashboard when Eyrie starts
 
 [discovery]
 interval_seconds = 30
