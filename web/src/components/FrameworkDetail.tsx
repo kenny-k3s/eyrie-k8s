@@ -1,18 +1,20 @@
 // FrameworkDetail.tsx — Dedicated framework page centred on a persistent tmux terminal.
 //
-// All actions (install, setup, uninstall, chat) run as commands in the same
+// Framework actions (install, setup, uninstall, direct framework chat) run in the
 // tmux shell session. No SSE, no log mode — one terminal for everything.
 // tmux keeps the session alive across page navigations and reloads.
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Download, Settings, Terminal as TerminalIcon, RefreshCw, ChevronRight, Search, Trash2, RotateCcw } from "lucide-react";
+import { ArrowLeft, ExternalLink, Download, Settings, Terminal as TerminalIcon, RefreshCw, ChevronRight, Search, Trash2, RotateCcw, Plus } from "lucide-react";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework } from "../lib/types";
 import { getFrameworkDetail } from "../lib/api";
 import { getFrameworkStatus } from "../lib/frameworkStatus";
 import { useData } from "../lib/DataContext";
 import Terminal, { TerminalHandle } from "./Terminal";
+import ConfigFieldsForm from "./ConfigFieldsForm";
+import { AddAgentDialog } from "./AddAgentDialog";
 import { shellQuote } from "../lib/shell";
 import { CHAT_COMMANDS } from "../lib/chatCommands";
 
@@ -96,22 +98,58 @@ export default function FrameworkDetail() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false);
   const [uninstallPurge, setUninstallPurge] = useState(false);
+  const [showConfigForm, setShowConfigForm] = useState(false);
+  const [showCreateAgent, setShowCreateAgent] = useState(false);
+
+  const notifyFrameworksChanged = useCallback(() => {
+    window.dispatchEvent(new Event("eyrie:frameworks-changed"));
+    void refreshGlobal(false);
+  }, [refreshGlobal]);
 
   const handleReset = () => {
     if (!safeId) return;
     setShowResetConfirm(false);
     sendToTerminal(`eyrie reset ${safeId} -y`);
+    setShowConfigForm(false);
+    setFramework((current) => current ? { ...current, configured: false } : current);
+    notifyFrameworksChanged();
+    window.setTimeout(() => { void loadFramework(); }, 750);
   };
+
+  const handleTerminalOutput = useCallback((line: string) => {
+    const lower = line.toLowerCase();
+    if (lower.includes("config reset") || (lower.includes("removed") && lower.includes("config"))) {
+      setShowResetConfirm(false);
+      setShowConfigForm(false);
+      setFramework((current) => current ? { ...current, configured: false } : current);
+      notifyFrameworksChanged();
+      window.setTimeout(() => { void loadFramework(); }, 500);
+      return;
+    }
+    if (
+      lower.includes("installed successfully") ||
+      lower.includes("configuration ready") ||
+      lower.includes("created default config") ||
+      lower.includes("config already exists")
+    ) {
+      window.setTimeout(() => {
+        void loadFramework();
+        notifyFrameworksChanged();
+      }, 500);
+    }
+  }, [loadFramework, notifyFrameworksChanged]);
 
   // ── Derived state ──────────────────────────────────────────────────
   const fwAgents = agents.filter((a) => a.framework === id);
   const emoji = FRAMEWORK_EMOJI[id || ""] || "";
   const status = framework ? getFrameworkStatus(framework) : null;
+  const isCodexFramework = id === "codex";
 
   // Binary name for locate/which commands (basename only, no path).
   const SAFE_BASENAME_RE = /^[A-Za-z0-9._-]+$/;
   const rawBinaryName = framework?.binary_path?.split("/").pop() || id || "";
   const safeBinaryName = SAFE_BASENAME_RE.test(rawBinaryName) ? rawBinaryName : safeId;
+  const chatCommand = safeId ? CHAT_COMMANDS[safeId] : undefined;
 
   // ── Terminal command helpers ────────────────────────────────────────
   const sendToTerminal = (cmd: string) => {
@@ -201,7 +239,15 @@ export default function FrameworkDetail() {
       )}
       {status?.needsSetup && (
         <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-3 text-xs text-text-secondary">
-          Binary installed at <code className="font-mono text-text-muted">{framework.binary_path}</code> but no config found at <code className="font-mono text-text-muted">{framework.config_path}</code>. Run setup to create it.
+          {isCodexFramework ? (
+            <>
+              Binary installed at <code className="font-mono text-text-muted">{framework.binary_path}</code>. No Eyrie Codex runtime config exists yet at <code className="font-mono text-text-muted">{framework.config_path}</code>. Use setup to create Eyrie's App Server config, then provision a Codex agent to chat.
+            </>
+          ) : (
+            <>
+              Binary installed at <code className="font-mono text-text-muted">{framework.binary_path}</code> but no config found at <code className="font-mono text-text-muted">{framework.config_path}</code>. Run setup to create it.
+            </>
+          )}
         </div>
       )}
 
@@ -263,12 +309,16 @@ export default function FrameworkDetail() {
         {status?.needsSetup && (
           <button
             onClick={() => {
+              if (!safeId) return;
+              if (isCodexFramework) {
+                sendToTerminal(`eyrie install ${safeId} -y`);
+                return;
+              }
               const bin = framework?.binary_path;
               const cmd = bin ? shellQuote(bin) : safeId;
-              if (!cmd) return;
-              sendToTerminal(`${cmd} onboard`);
+              if (cmd) sendToTerminal(`${cmd} onboard`);
             }}
-            disabled={!framework?.binary_path && !safeId}
+            disabled={!safeId || (!isCodexFramework && !framework?.binary_path)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors disabled:opacity-50"
           >
             <Settings className="h-3 w-3" /> set up
@@ -276,23 +326,31 @@ export default function FrameworkDetail() {
         )}
         {status?.isInstalled && (
           <>
+            {chatCommand && (
+              <button
+                onClick={() => {
+                  if (!safeId) return;
+                  const sub = chatCommand.split(" ").slice(1).join(" ");
+                  const bin = framework?.binary_path;
+                  const cmd = bin
+                    ? `${shellQuote(bin)}${sub ? " " + sub : ""}`
+                    : chatCommand;
+                  sendToTerminal(cmd);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+              >
+                <TerminalIcon className="h-3 w-3" /> chat
+              </button>
+            )}
             <button
-              onClick={() => {
-                if (!safeId) return;
-                const sub = CHAT_COMMANDS[safeId]?.split(" ").slice(1).join(" ") || "";
-                const bin = framework?.binary_path;
-                const cmd = bin
-                  ? `${shellQuote(bin)}${sub ? " " + sub : ""}`
-                  : CHAT_COMMANDS[safeId];
-                if (cmd) sendToTerminal(cmd);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
-            >
-              <TerminalIcon className="h-3 w-3" /> chat
-            </button>
-            <button
-              onClick={() => navigate(`/agents/${id}/config`)}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+              onClick={() => setShowConfigForm((open) => !open)}
+              aria-expanded={showConfigForm}
+              aria-controls="framework-config-panel"
+              className={`flex items-center gap-1.5 px-3 py-1.5 border rounded text-xs font-medium transition-colors ${
+                showConfigForm
+                  ? "border-accent text-accent"
+                  : "border-border text-text-secondary hover:text-text"
+              }`}
             >
               <Settings className="h-3 w-3" /> configure
             </button>
@@ -334,7 +392,7 @@ export default function FrameworkDetail() {
           </>
         )}
         {/* Uninstall */}
-        {(status?.isInstalled || status?.isConfigured) && !showUninstallConfirm && !showResetConfirm && (
+        {(status?.isInstalled || status?.isConfigured) && !isCodexFramework && !showUninstallConfirm && !showResetConfirm && (
           <button
             onClick={() => setShowUninstallConfirm(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-red/30 text-red/70 hover:text-red hover:border-red/50 rounded text-xs font-medium transition-colors"
@@ -370,15 +428,40 @@ export default function FrameworkDetail() {
         )}
       </div>
 
+      {showConfigForm && (
+        <div id="framework-config-panel" className="rounded border border-border bg-surface p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-text">configuration</h2>
+              <p className="mt-1 text-[10px] text-text-muted">{framework.config_path}</p>
+            </div>
+            <button
+              onClick={() => setShowConfigForm(false)}
+              className="text-xs text-text-muted transition-colors hover:text-text"
+            >
+              close
+            </button>
+          </div>
+          <ConfigFieldsForm
+            framework={framework}
+            onSaved={() => {
+              void loadFramework();
+              notifyFrameworksChanged();
+            }}
+          />
+        </div>
+      )}
+
       {/* ── Terminal (always visible, persistent tmux session) ────────────── */}
       <div className="flex-1 min-h-0">
         <Terminal
-          key={`shell-${safeId ?? "shell"}`}
+          key={`framework-shell-${safeId ?? "shell"}`}
           ref={termRef}
           agentName={safeId || "shell"}
           useShell
           inline
-          session={safeId ? `eyrie-${safeId}` : undefined}
+          session={safeId ? `eyrie-framework-${safeId}` : undefined}
+          onOutput={handleTerminalOutput}
         />
       </div>
 
@@ -430,6 +513,16 @@ export default function FrameworkDetail() {
             </table>
           </div>
         )}
+        {status?.isReady && (
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={() => setShowCreateAgent(true)}
+              className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
+            >
+              <Plus className="h-3 w-3" /> create agent
+            </button>
+          </div>
+        )}
       </div>
 
       {/* API key hint */}
@@ -474,6 +567,18 @@ export default function FrameworkDetail() {
           )}
         </div>
       </details>
+
+      {showCreateAgent && safeId && (
+        <AddAgentDialog
+          defaultFramework={safeId}
+          lockFramework
+          onCreated={(instance) => {
+            void refreshGlobal(false);
+            navigate(`/agents/${instance.name}/chat`);
+          }}
+          onClose={() => setShowCreateAgent(false)}
+        />
+      )}
     </div>
   );
 }

@@ -105,7 +105,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
 
     setTimeout(() => {
       if (cancelled) return;
-      try { fitAddon.fit(); } catch { /* ignore */ }
+      try {
+        fitAddon.fit();
+        term.scrollToBottom();
+      } catch { /* ignore */ }
     }, 50);
 
     try { term.focus(); } catch { /* DOM may be detached in StrictMode */ }
@@ -122,7 +125,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
 
     ws.onopen = () => {
       if (cancelled) return;
-      try { fitAddon.fit(); } catch { /* ignore */ }
+      try {
+        fitAddon.fit();
+        term.scrollToBottom();
+      } catch { /* ignore */ }
       ws.send(`resize:${term.rows}:${term.cols}`);
     };
 
@@ -135,7 +141,9 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       if (cancelled) return;
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
-        term.write(bytes);
+        term.write(bytes, () => {
+          if (!term.hasSelection()) term.scrollToBottom();
+        });
         lineParser(bytes);
         if (statusRef.current === "connecting") setStatus("connected");
         if (initialCommand && !sentInitialCommand) {
@@ -198,7 +206,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
 
     const handleResize = () => {
       if (cancelled) return;
-      try { fitAddon.fit(); } catch { return; }
+      try {
+        fitAddon.fit();
+        term.scrollToBottom();
+      } catch { return; }
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(`resize:${term.rows}:${term.cols}`);
       }

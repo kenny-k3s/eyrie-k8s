@@ -1,24 +1,33 @@
 import { useState, useEffect } from "react";
-import type { Persona } from "../lib/types";
-import { fetchPersonas, createInstance } from "../lib/api";
+import type { AgentInstance, Persona, Project } from "../lib/types";
+import { fetchInstances, fetchPersonas, fetchProjects, createInstance } from "../lib/api";
+import { effectiveAgentName, suggestAgentName } from "../lib/agentNaming";
 
 export interface AddAgentDialogProps {
-  projectId: string;
-  onCreated: () => void;
+  projectId?: string;
+  defaultFramework?: string;
+  lockFramework?: boolean;
+  onCreated: (instance: AgentInstance) => void;
   onClose: () => void;
 }
 
 export function AddAgentDialog({
   projectId,
+  defaultFramework = "embedded",
+  lockFramework = false,
   onCreated,
   onClose,
 }: AddAgentDialogProps) {
   const [name, setName] = useState("");
-  const [framework, setFramework] = useState("embedded");
+  const [framework, setFramework] = useState(defaultFramework);
+  const [selectedProjectId, setSelectedProjectId] = useState(projectId || "");
   const [personaId, setPersonaId] = useState("");
   const [personas, setPersonas] = useState<Persona[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const suggestedName = suggestAgentName(framework, instances);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -36,24 +45,46 @@ export function AddAgentDialog({
     });
   }, []);
 
+  useEffect(() => {
+    fetchInstances().then(setInstances).catch((err) => {
+      console.error("Failed to load instances:", err);
+      setInstances([]);
+    });
+  }, []);
+
+  useEffect(() => {
+    setFramework(defaultFramework);
+  }, [defaultFramework]);
+
+  useEffect(() => {
+    if (projectId) {
+      setSelectedProjectId(projectId);
+      return;
+    }
+    fetchProjects().then(setProjects).catch((err) => {
+      console.error("Failed to load projects:", err);
+      setProjects([]);
+    });
+  }, [projectId]);
+
   const handleCreate = async () => {
-    const trimmedName = name.trim();
-    if (!trimmedName) {
+    const resolvedName = effectiveAgentName(name, suggestedName);
+    if (!resolvedName) {
       setError("Name cannot be blank");
       return;
     }
     setCreating(true);
     setError("");
     try {
-      await createInstance({
-        name: trimmedName,
+      const created = await createInstance({
+        name: resolvedName,
         framework,
         persona_id: personaId || undefined,
         hierarchy_role: "talon",
-        project_id: projectId,
+        project_id: selectedProjectId || undefined,
         auto_start: true,
       });
-      onCreated();
+      onCreated(created);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create agent");
@@ -71,7 +102,9 @@ export function AddAgentDialog({
       aria-labelledby="add-agent-dialog-title"
     >
       <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-        <h2 id="add-agent-dialog-title" className="text-sm font-bold text-text">add agent to project</h2>
+        <h2 id="add-agent-dialog-title" className="text-sm font-bold text-text">
+          {projectId ? "add agent to project" : "create agent"}
+        </h2>
 
         <div>
           <label htmlFor="agent-name" className="block text-xs font-medium text-text-secondary mb-1">name</label>
@@ -81,26 +114,50 @@ export function AddAgentDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-            placeholder="researcher-riley"
+            placeholder={suggestedName}
             autoFocus
           />
         </div>
 
-        <div>
-          <label htmlFor="agent-framework" className="block text-xs font-medium text-text-secondary mb-1">framework</label>
-          <select
-            id="agent-framework"
-            value={framework}
-            onChange={(e) => setFramework(e.target.value)}
-            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-          >
-            <option value="embedded">Embedded (EyrieClaw)</option>
-            <option value="zeroclaw">ZeroClaw</option>
-            <option value="openclaw">OpenClaw</option>
-            <option value="hermes">Hermes</option>
-            <option value="picoclaw">PicoClaw</option>
-          </select>
-        </div>
+        {lockFramework ? (
+          <div>
+            <div className="block text-xs font-medium text-text-secondary mb-1">framework</div>
+            <div className="rounded border border-border bg-surface px-3 py-2 text-xs text-text">
+              {frameworkLabel(framework)}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label htmlFor="agent-framework" className="block text-xs font-medium text-text-secondary mb-1">framework</label>
+            <select
+              id="agent-framework"
+              value={framework}
+              onChange={(e) => setFramework(e.target.value)}
+              className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+            >
+              {FRAMEWORK_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {!projectId && (
+          <div>
+            <label htmlFor="agent-project" className="block text-xs font-medium text-text-secondary mb-1">project (optional)</label>
+            <select
+              id="agent-project"
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+            >
+              <option value="">none</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>{project.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div>
           <label htmlFor="agent-persona" className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
@@ -127,7 +184,7 @@ export function AddAgentDialog({
           </button>
           <button
             onClick={handleCreate}
-            disabled={creating || !name.trim()}
+            disabled={creating || !suggestedName}
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
           >
             {creating ? "creating..." : "create agent"}
@@ -136,4 +193,17 @@ export function AddAgentDialog({
       </div>
     </div>
   );
+}
+
+const FRAMEWORK_OPTIONS = [
+  { value: "embedded", label: "Embedded (EyrieClaw)" },
+  { value: "zeroclaw", label: "ZeroClaw" },
+  { value: "openclaw", label: "OpenClaw" },
+  { value: "hermes", label: "Hermes" },
+  { value: "picoclaw", label: "PicoClaw" },
+  { value: "codex", label: "Codex App Server" },
+];
+
+function frameworkLabel(framework: string): string {
+  return FRAMEWORK_OPTIONS.find((option) => option.value === framework)?.label ?? framework;
 }

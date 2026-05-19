@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, LayoutDashboard, Layers, Network, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
-import { FRAMEWORK_EMOJI } from "../lib/types";
+import { FRAMEWORK_EMOJI, type Framework } from "../lib/types";
 import { fetchFrameworks } from "../lib/api";
+import { getFrameworkStatus } from "../lib/frameworkStatus";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
@@ -60,25 +61,38 @@ export default function Sidebar() {
   const transparentImg = useRef<HTMLImageElement | null>(null);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);
 
-  // Installed frameworks from the registry — shows frameworks in the
-  // sidebar even when no agent is running (discovery only returns running ones).
-  const [installedFrameworks, setInstalledFrameworks] = useState<string[]>([]);
+  // Installed/configured frameworks from the registry — shows frameworks in
+  // the sidebar even when no agent is running (discovery only returns running
+  // ones), while keeping enough state to render the correct status dot.
+  const [frameworksById, setFrameworksById] = useState<Record<string, Framework>>({});
+  const installedFrameworks = useMemo(
+    () => Object.values(frameworksById)
+      .filter((fw) => fw.installed || fw.configured)
+      .map((fw) => fw.id),
+    [frameworksById],
+  );
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      fetchFrameworks()
+    const load = (refresh = false) => {
+      fetchFrameworks(refresh)
         .then((fws) => {
           if (cancelled) return;
-          const ids = fws.filter((fw) => fw.installed).map((fw) => fw.id);
-          setInstalledFrameworks((prev) =>
-            JSON.stringify(prev) === JSON.stringify(ids) ? prev : ids,
+          const next = Object.fromEntries(fws.map((fw) => [fw.id, fw]));
+          setFrameworksById((prev) =>
+            JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
           );
         })
         .catch(() => {});
     };
     load();
+    const handleFrameworksChanged = () => load(true);
+    window.addEventListener("eyrie:frameworks-changed", handleFrameworksChanged);
     const id = setInterval(load, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => {
+      cancelled = true;
+      window.removeEventListener("eyrie:frameworks-changed", handleFrameworksChanged);
+      clearInterval(id);
+    };
   }, []);
 
   // Create a 1x1 transparent image for drag operations to prevent
@@ -258,6 +272,17 @@ export default function Sidebar() {
                   {frameworks.map((fw) => {
                     const fwAgents = agents.filter((a) => a.framework === fw);
                     const aliveCount = fwAgents.filter((a) => a.alive).length;
+                    const registryFramework = frameworksById[fw];
+                    const registryStatus = registryFramework ? getFrameworkStatus(registryFramework) : null;
+                    const dotClass = aliveCount > 0
+                      ? "bg-green"
+                      : fwAgents.length > 0
+                        ? "bg-red"
+                        : registryStatus?.isReady
+                          ? "bg-green"
+                          : registryStatus?.isInstalled || registryStatus?.isConfigured
+                            ? "bg-yellow"
+                            : "bg-text-muted/30";
                     const emoji = FRAMEWORK_EMOJI[fw] || "";
                     return (
                       <Link
@@ -269,7 +294,7 @@ export default function Sidebar() {
                             : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
                         }`}
                       >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${aliveCount > 0 ? "bg-green" : fwAgents.length > 0 ? "bg-red" : "bg-text-muted/30"}`} />
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
                         <span className="truncate">{fw} {emoji}</span>
                       </Link>
                     );

@@ -139,9 +139,14 @@ function InstallStep({ framework, safeId, onRun }: Props) {
 function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
   const hasSchema = (framework.config_schema?.common_fields?.length ?? 0) > 0;
+  const isCodexFramework = safeId === "codex";
   const [tab, setTab] = useState<"form" | "wizard" | "edit">(hasSchema ? "form" : "wizard");
 
   const handleWizard = () => {
+    if (isCodexFramework) {
+      onRun("eyrie install codex -y");
+      return;
+    }
     const binary = framework.binary_path || safeId;
     onRun(`${shellQuote(binary)} onboard`);
   };
@@ -150,7 +155,9 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
     <div className="space-y-3">
       <StepHeader n={3} label="configure" />
       <p className="text-xs text-text-secondary">
-        Pick a provider, model, and defaults. Config lives at{" "}
+        {isCodexFramework
+          ? "Create Eyrie's managed Codex runtime config. Config lives at "
+          : "Pick a provider, model, and defaults. Config lives at "}
         <code className="text-[10px] text-text-muted">{framework.config_path}</code>.
       </p>
 
@@ -175,14 +182,14 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
       {tab === "wizard" && (
         <div className="space-y-2">
           <code className="block rounded border border-border bg-bg px-2 py-1.5 text-[11px] text-text-muted">
-            $ {framework.binary_path || safeId} onboard
+            $ {isCodexFramework ? "eyrie install codex -y" : `${framework.binary_path || safeId} onboard`}
           </code>
           <button
             onClick={handleWizard}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
           >
             <Play className="h-3 w-3" />
-            run wizard
+            {isCodexFramework ? "set up runtime" : "run wizard"}
           </button>
         </div>
       )}
@@ -382,6 +389,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
 
 function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
+  const isCodexFramework = safeId === "codex";
 
   const handleGateway = () => {
     if (!framework.start_cmd) return;
@@ -416,7 +424,9 @@ function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
     <div className="space-y-3">
       <StepHeader n={5} label="launch" />
       <p className="text-xs text-text-secondary">
-        Start the gateway (if needed) and launch a chat to confirm {framework.name} is working.
+        {isCodexFramework
+          ? "Provision a Codex agent to validate Eyrie's managed runtime."
+          : `Start the gateway (if needed) and launch a chat to confirm ${framework.name} is working.`}
       </p>
       <div className="flex flex-wrap gap-2">
         {framework.start_cmd && (
@@ -428,20 +438,27 @@ function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
             start gateway
           </button>
         )}
-        <button
-          onClick={handleChat}
-          disabled={!chatCommand}
-          title={chatCommand ? undefined : "no chat command known for this framework"}
-          className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <TerminalIcon className="h-3 w-3" />
-          launch chat
-        </button>
+        {!isCodexFramework && (
+          <button
+            onClick={handleChat}
+            disabled={!chatCommand}
+            title={chatCommand ? undefined : "no chat command known for this framework"}
+            className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <TerminalIcon className="h-3 w-3" />
+            launch chat
+          </button>
+        )}
       </div>
-      {!chatCommand && (
+      {!isCodexFramework && !chatCommand && (
         <p className="text-[10px] text-text-muted">
           No chat command is registered for {framework.name}. Install and
           configure first, or launch the gateway and chat via your own client.
+        </p>
+      )}
+      {isCodexFramework && (
+        <p className="text-[10px] text-text-muted">
+          Codex chat runs through Eyrie-provisioned agents, not a framework-level CLI chat.
         </p>
       )}
 

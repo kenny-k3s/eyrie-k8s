@@ -508,12 +508,12 @@ export default function FrameworksPhase({ onNavigate }: Props) {
           frameworks re-connects to that framework's dedicated session. */}
       {active !== "choose" && <div className="h-[320px]">
         <Terminal
-          key={`fw-shell-${safeId ?? "none"}`}
+          key={`framework-shell-${safeId ?? "none"}`}
           ref={termRef}
           agentName={safeId || "shell"}
           useShell
           inline
-          session={safeId ? `eyrie-${safeId}` : undefined}
+          session={safeId ? `eyrie-framework-${safeId}` : undefined}
           onOutput={handleOutput}
         />
       </div>}
