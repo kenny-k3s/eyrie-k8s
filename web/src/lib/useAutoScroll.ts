@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 // WHY threshold instead of exact match: scrollHeight - scrollTop - clientHeight
 // is often off by 1-2px due to fractional rendering. A 50px threshold means
@@ -26,11 +26,19 @@ export function useAutoScroll(deps: unknown[]): RefObject<HTMLDivElement | null>
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Scroll to bottom only if user is near the bottom
-  useEffect(() => {
-    if (isNearBottom.current) {
-      ref.current?.scrollTo(0, ref.current.scrollHeight);
-    }
+  // Scroll after layout so optimistic rows replaced by persisted rows still
+  // land at the true bottom even when the message count has not changed.
+  useLayoutEffect(() => {
+    if (!isNearBottom.current) return;
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTo(0, el.scrollHeight);
+    const frame = requestAnimationFrame(() => {
+      if (isNearBottom.current) {
+        el.scrollTo(0, el.scrollHeight);
+      }
+    });
+    return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
