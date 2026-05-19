@@ -1,7 +1,9 @@
 import { Routes, Route, Navigate, useParams, useNavigate, Link } from "react-router-dom";
-import { RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Play, Power, RefreshCw } from "lucide-react";
 import type { AgentInfo } from "./lib/types";
 import { formatUptime, formatBytes } from "./lib/format";
+import { fetchDevBackendStatus, startDevBackend, stopDevBackend } from "./lib/api";
 import { DataProvider, useData } from "./lib/DataContext";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
@@ -18,6 +20,7 @@ import FrameworkCompare from "./components/FrameworkCompare";
 import CommanderChat from "./components/CommanderChat";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
+import { useBackendStartMode } from "./lib/useBackendStartMode";
 
 export default function App() {
   return (
@@ -28,66 +31,263 @@ export default function App() {
 }
 
 function AppContent() {
-  const { agents, loading, error, backendDown, refresh } = useData();
+  const { agents, loading, error, backendDown, backendPollingPaused, pauseBackendPolling, resumeBackendPolling, refresh, setBackendStarting } = useData();
+  const [backendStartMessage, setBackendStartMessage] = useState<string | null>(null);
+  const [backendStartError, setBackendStartError] = useState<string | null>(null);
+  const [startingBackend, setStartingBackend] = useState(false);
+  const [stoppingBackend, setStoppingBackend] = useState(false);
+  const backendStartTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const { mode: backendStartMode } = useBackendStartMode();
   useFont(); // Apply saved font on mount
   useTheme(); // Apply saved theme on mount
+
+  const canStartDevBackend = import.meta.env.DEV;
+
+  function clearBackendStartTimeout() {
+    if (!backendStartTimeoutRef.current) return;
+    window.clearTimeout(backendStartTimeoutRef.current);
+    backendStartTimeoutRef.current = null;
+  }
+
+  useEffect(() => {
+    if (backendDown || backendPollingPaused) return;
+    if (startingBackend) return;
+    clearBackendStartTimeout();
+    setBackendStartMessage(null);
+    setBackendStartError(null);
+    setStartingBackend(false);
+  }, [backendDown, backendPollingPaused, startingBackend]);
+
+  useEffect(() => () => clearBackendStartTimeout(), []);
+
+  async function waitForDevBackendReachable(timeoutMs = 20_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const status = await fetchDevBackendStatus();
+        if (status.backend_reachable) return true;
+      } catch {
+        // The helper endpoint may lag briefly while Vite is settling.
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    return false;
+  }
+
+  function finishBackendStartAfterReconcile() {
+    clearBackendStartTimeout();
+    backendStartTimeoutRef.current = window.setTimeout(() => {
+      void refresh(false);
+      setBackendStartMessage(null);
+      setStartingBackend(false);
+      setBackendStarting(false);
+      backendStartTimeoutRef.current = null;
+    }, 1000);
+  }
+
+  async function handleStartBackend() {
+    if (startingBackend) return;
+    let waitingForReconcile = false;
+    clearBackendStartTimeout();
+    setStartingBackend(true);
+    setBackendStarting(true);
+    setBackendStartError(null);
+    setBackendStartMessage("starting backend...");
+    try {
+      resumeBackendPolling();
+      const result = await startDevBackend(backendStartMode);
+      if (result.status === "already_running") {
+        await refresh(false);
+        waitingForReconcile = true;
+        finishBackendStartAfterReconcile();
+        return;
+      }
+      const reachable = await waitForDevBackendReachable();
+      if (reachable) {
+        await refresh(false);
+        waitingForReconcile = true;
+        finishBackendStartAfterReconcile();
+        return;
+      }
+      setBackendStartMessage("backend still starting...");
+      window.setTimeout(() => void refresh(false), 3000);
+    } catch (err) {
+      pauseBackendPolling();
+      setBackendStartMessage(null);
+      setBackendStartError(err instanceof Error ? err.message : "failed to start backend");
+      setBackendStarting(false);
+    } finally {
+      if (!waitingForReconcile) {
+        setStartingBackend(false);
+        setBackendStarting(false);
+      }
+    }
+  }
+
+  async function handleStopBackend() {
+    clearBackendStartTimeout();
+    setBackendStarting(false);
+    setStoppingBackend(true);
+    setBackendStartError(null);
+    setBackendStartMessage("stopping backend...");
+    pauseBackendPolling();
+    try {
+      await stopDevBackend();
+      setBackendStartMessage(null);
+    } catch (err) {
+      setBackendStartMessage("backend polling paused");
+      setBackendStartError(err instanceof Error ? err.message : "failed to stop backend");
+    } finally {
+      setStoppingBackend(false);
+    }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
 
-      <main className="flex-1 overflow-hidden min-w-0">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Persistent banner when backend is unreachable — shown across all
             routes so the user always knows why data isn't updating. */}
-        {backendDown && (
-          <div className="flex items-center gap-2 border-b border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-yellow-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
-            backend unreachable — retrying...
+        {canStartDevBackend && startingBackend && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-yellow-400">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400" />
+              backend starting...
+            </div>
+            <button
+              type="button"
+              disabled
+              className="inline-flex items-center gap-1.5 border border-yellow-400/40 px-2 py-1 text-[11px] text-yellow-300 opacity-50"
+              title={backendStartMode === "binary" ? "Starting the Eyrie backend from the fast dev binary" : "Starting the Eyrie backend through make dev-go"}
+            >
+              <Play className="h-3 w-3" />
+              $ starting
+            </button>
+            {backendStartError && (
+              <span className="text-red">{backendStartError}</span>
+            )}
           </div>
         )}
-        <Routes>
-          {/* Full-width routes (no padding/max-width) */}
-          <Route path="/projects/:id" element={<ProjectDetail />} />
-
-          {/* Constrained routes */}
-          <Route path="*" element={
-            <div className="mx-auto max-w-5xl px-8 py-8 h-full overflow-y-auto">
-              {error && !backendDown && (
-                <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
-                  {error}
-                </div>
-              )}
-              <Routes>
-                <Route path="/" element={<OnboardingFlow />} />
-                <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
-                <Route path="/mission-control" element={<HierarchyPage />} />
-                <Route path="/mission-control/agents" element={<AgentsPage />} />
-                <Route path="/projects" element={<ProjectListPage />} />
-            <Route
-              path="/agents/overview"
-              element={
-                <AgentList
-                  agents={agents}
-                  loading={loading}
-                  onRefresh={refresh}
-                />
-              }
-            />
-            <Route path="/agents/compare" element={<AgentCompare />} />
-            <Route path="/frameworks" element={<FrameworkCompare />} />
-            <Route path="/frameworks/compare" element={<Navigate to="/frameworks" replace />} />
-            <Route path="/install" element={<Navigate to="/frameworks" replace />} />
-            <Route
-              path="/agents/:name/:tab?"
-              element={<AgentDetailRoute />}
-            />
-                <Route path="/frameworks/:id" element={<FrameworkDetail />} />
-                <Route path="/personas" element={<PersonasPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-              </Routes>
+        {canStartDevBackend && !startingBackend && !backendDown && !backendPollingPaused && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-accent/20 bg-accent/5 px-4 py-2 text-xs text-accent">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+              dev backend reachable
             </div>
-          } />
-        </Routes>
+            <button
+              type="button"
+              onClick={handleStopBackend}
+              disabled={stoppingBackend}
+              className="inline-flex items-center gap-1.5 border border-accent/40 px-2 py-1 text-[11px] text-accent transition-colors hover:border-accent hover:text-text disabled:opacity-50"
+              title="Stop the Eyrie backend if this Vite dev server started it"
+            >
+              <Power className="h-3 w-3" />
+              {stoppingBackend ? "$ stopping" : "$ stop backend"}
+            </button>
+            {backendStartMessage && !startingBackend && (
+              <span className="text-accent/80">{backendStartMessage}</span>
+            )}
+            {backendStartError && (
+              <span className="text-red">{backendStartError}</span>
+            )}
+          </div>
+        )}
+        {canStartDevBackend && !startingBackend && backendPollingPaused && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-yellow-400">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
+              backend stopped
+            </div>
+            <button
+              type="button"
+              onClick={handleStartBackend}
+              disabled={startingBackend || stoppingBackend}
+              className="inline-flex items-center gap-1.5 border border-yellow-400/40 px-2 py-1 text-[11px] text-yellow-300 transition-colors hover:border-yellow-300 hover:text-yellow-100 disabled:opacity-50"
+              title={backendStartMode === "binary" ? "Start the Eyrie backend from the fast dev binary" : "Start the Eyrie backend through make dev-go"}
+            >
+              <Play className="h-3 w-3" />
+              {stoppingBackend ? "$ stopping" : startingBackend ? "$ starting" : "$ start backend"}
+            </button>
+            {backendStartMessage && !startingBackend && (
+              <span className="text-yellow-300/80">{backendStartMessage}</span>
+            )}
+            {backendStartError && (
+              <span className="text-red">{backendStartError}</span>
+            )}
+          </div>
+        )}
+        {!startingBackend && backendDown && !backendPollingPaused && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-yellow-400">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              {startingBackend ? "backend starting..." : "backend unreachable — retrying..."}
+            </div>
+            {canStartDevBackend && (
+              <button
+                type="button"
+                onClick={handleStartBackend}
+                disabled={startingBackend}
+                className="inline-flex items-center gap-1.5 border border-yellow-400/40 px-2 py-1 text-[11px] text-yellow-300 transition-colors hover:border-yellow-300 hover:text-yellow-100 disabled:opacity-50"
+                title={backendStartMode === "binary" ? "Start the Eyrie backend from the fast dev binary" : "Start the Eyrie backend through make dev-go"}
+              >
+                <Play className="h-3 w-3" />
+                {startingBackend ? "$ starting" : "$ start backend"}
+              </button>
+            )}
+            {backendStartMessage && !startingBackend && (
+              <span className="text-yellow-300/80">{backendStartMessage}</span>
+            )}
+            {backendStartError && (
+              <span className="text-red">{backendStartError}</span>
+            )}
+          </div>
+        )}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <Routes>
+            {/* Full-width routes (no padding/max-width) */}
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+
+            {/* Constrained routes */}
+            <Route path="*" element={
+              <div className="mx-auto h-full max-w-5xl overflow-y-auto px-8 py-8">
+                {error && !backendDown && (
+                  <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
+                    {error}
+                  </div>
+                )}
+                <Routes>
+                  <Route path="/" element={<OnboardingFlow />} />
+                  <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
+                  <Route path="/mission-control" element={<HierarchyPage />} />
+                  <Route path="/mission-control/agents" element={<AgentsPage />} />
+                  <Route path="/projects" element={<ProjectListPage />} />
+                  <Route
+                    path="/agents/overview"
+                    element={
+                      <AgentList
+                        agents={agents}
+                        loading={loading}
+                        onRefresh={refresh}
+                      />
+                    }
+                  />
+                  <Route path="/agents/compare" element={<AgentCompare />} />
+                  <Route path="/frameworks" element={<FrameworkCompare />} />
+                  <Route path="/frameworks/compare" element={<Navigate to="/frameworks" replace />} />
+                  <Route path="/install" element={<Navigate to="/frameworks" replace />} />
+                  <Route
+                    path="/agents/:name/:tab?"
+                    element={<AgentDetailRoute />}
+                  />
+                  <Route path="/frameworks/:id" element={<FrameworkDetail />} />
+                  <Route path="/personas" element={<PersonasPage />} />
+                  <Route path="/settings" element={<SettingsPage />} />
+                </Routes>
+              </div>
+            } />
+          </Routes>
+        </div>
       </main>
 
       <CommanderChat />

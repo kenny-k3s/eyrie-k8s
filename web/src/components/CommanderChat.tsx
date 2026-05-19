@@ -35,6 +35,7 @@ import type {
 } from "../lib/types";
 import { useAutoScroll } from "../lib/useAutoScroll";
 import { KEYS_CHANGED_EVENT, COMMANDER_PREFILL_EVENT } from "../lib/events";
+import { useData } from "../lib/DataContext";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ interface Props {
 }
 
 export default function CommanderChat({ phase }: Props) {
+  const { backendPollingPaused } = useData();
   const [expanded, setExpanded] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -107,6 +109,7 @@ export default function CommanderChat({ phase }: Props) {
   /** Fetch history + memory and update state. Shared across mount,
    *  keys-changed, and health-poll paths. */
   const rehydrate = useCallback(async (signal?: AbortSignal) => {
+    if (backendPollingPaused) return;
     const history = await fetchCommanderHistory();
     if (signal?.aborted) return;
     setUnavailable(false);
@@ -115,29 +118,32 @@ export default function CommanderChat({ phase }: Props) {
       content: m.content,
     })));
     fetchCommanderMemory().then((mem) => { if (!signal?.aborted) setMemories(mem); }).catch(() => {});
-  }, []);
+  }, [backendPollingPaused]);
 
   useEffect(() => {
+    if (backendPollingPaused) return;
     const ac = new AbortController();
     rehydrate(ac.signal).catch(() => { if (!ac.signal.aborted) setUnavailable(true); });
     return () => { ac.abort(); };
-  }, [rehydrate]);
+  }, [rehydrate, backendPollingPaused]);
 
   // Immediately re-check when keys change (add or delete from any page)
   useEffect(() => {
     let ac: AbortController | null = null;
     const handler = () => {
+      if (backendPollingPaused) return;
       ac?.abort();
       ac = new AbortController();
       rehydrate(ac.signal).catch(() => { if (!ac?.signal.aborted) setUnavailable(true); });
     };
     window.addEventListener(KEYS_CHANGED_EVENT, handler);
     return () => { window.removeEventListener(KEYS_CHANGED_EVENT, handler); ac?.abort(); };
-  }, [rehydrate]);
+  }, [rehydrate, backendPollingPaused]);
 
   // Continuous health poll — fast (5s) while unavailable, slow (15s) when up.
   // Detects both key addition (becomes available) and key deletion (goes offline).
   useEffect(() => {
+    if (backendPollingPaused) return;
     const ac = new AbortController();
     const interval = unavailable ? 5_000 : 15_000;
     const id = setInterval(async () => {
@@ -152,7 +158,7 @@ export default function CommanderChat({ phase }: Props) {
       }
     }, interval);
     return () => { clearInterval(id); ac.abort(); };
-  }, [unavailable, rehydrate]);
+  }, [unavailable, rehydrate, backendPollingPaused]);
 
   // ── SSE event handler ──────────────────────────────────────────────
 
@@ -259,18 +265,26 @@ export default function CommanderChat({ phase }: Props) {
     }
   }, []);
 
+  useEffect(() => {
+    if (!backendPollingPaused) return;
+    controllerRef.current?.abort();
+    setStreaming(false);
+    setUnavailable(false);
+  }, [backendPollingPaused]);
+
   // ── Actions ────────────────────────────────────────────────────────
 
   const send = useCallback(() => {
     const msg = input.trim();
-    if (!msg || streaming) return;
+    if (!msg || streaming || backendPollingPaused) return;
     setInput("");
     setItems((prev) => [...prev, { role: "user", content: msg }]);
     setStreaming(true);
     controllerRef.current = streamCommanderChat(msg, handleEvent);
-  }, [input, streaming, handleEvent]);
+  }, [input, streaming, backendPollingPaused, handleEvent]);
 
   const handleConfirm = useCallback((id: string, approved: boolean) => {
+    if (backendPollingPaused) return;
     // Update the confirmation entry status
     setItems((prev) =>
       prev.map((item) => {
@@ -288,15 +302,16 @@ export default function CommanderChat({ phase }: Props) {
     // Stream the continuation turn
     setStreaming(true);
     controllerRef.current = confirmCommanderAction(id, approved, handleEvent);
-  }, [handleEvent]);
+  }, [backendPollingPaused, handleEvent]);
 
   const handleClear = useCallback(async () => {
+    if (backendPollingPaused) return;
     try {
       await clearCommanderHistory();
       setItems([]);
       setContextUsage(null);
     } catch { /* silent */ }
-  }, []);
+  }, [backendPollingPaused]);
 
   const stop = useCallback(() => {
     controllerRef.current?.abort();
@@ -515,14 +530,14 @@ export default function CommanderChat({ phase }: Props) {
                 send();
               }
             }}
-            disabled={unavailable}
-            placeholder={unavailable ? "set up an API key first" : "ask the commander..."}
+            disabled={unavailable || backendPollingPaused}
+            placeholder={backendPollingPaused ? "backend is stopped" : unavailable ? "set up an API key first" : "ask the commander..."}
             rows={1}
             className="flex-1 resize-none rounded border border-border bg-bg px-2 py-1.5 text-xs text-text placeholder:text-text-muted focus:border-accent focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
           />
           <button
             onClick={send}
-            disabled={unavailable || !input.trim() || streaming}
+            disabled={unavailable || backendPollingPaused || !input.trim() || streaming}
             className="rounded bg-purple px-2 py-1.5 text-white transition-colors hover:bg-purple/80 disabled:opacity-30"
           >
             <Send className="h-3 w-3" />

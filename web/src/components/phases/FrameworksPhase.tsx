@@ -26,6 +26,8 @@ import FrameworkProgressTimeline, {
 } from "../FrameworkProgressTimeline";
 import FrameworkStepPanel, { askCommander } from "../FrameworkStepPanel";
 import { loadSaved, saveSubStep, isApiKeyConfirmed, setApiKeyConfirmedFor } from "../../lib/onboardingStorage";
+import { useData } from "../../lib/DataContext";
+import BackendStoppedState from "../BackendStoppedState";
 
 /** Escape special regex characters in a string. */
 function escapeRe(s: string): string {
@@ -108,6 +110,7 @@ interface Props {
 const VALID_STEPS: InnerStepId[] = ["choose", "install", "configure", "api_key", "launch"];
 
 export default function FrameworksPhase({ onNavigate }: Props) {
+  const { backendDown } = useData();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Browseable framework list (for the choose step)
@@ -175,6 +178,10 @@ export default function FrameworksPhase({ onNavigate }: Props) {
   // Initial + after-install refetch of framework list. Keys are fetched here
   // and after every successful save from ApiKeyForm.
   const refreshFrameworks = useCallback(async () => {
+    if (backendDown) {
+      setFrameworksLoading(false);
+      return;
+    }
     try {
       setFrameworksLoading(true);
       const list = await fetchFrameworks();
@@ -182,18 +189,20 @@ export default function FrameworksPhase({ onNavigate }: Props) {
     } finally {
       setFrameworksLoading(false);
     }
-  }, []);
+  }, [backendDown]);
 
   const refreshKeys = useCallback(async () => {
+    if (backendDown) return;
     try {
       const entries = await fetchKeys();
       setKeys(entries);
     } catch {
       setKeys([]);
     }
-  }, []);
+  }, [backendDown]);
 
   const loadChosen = useCallback(async () => {
+    if (backendDown) return;
     if (!safeId) {
       setFramework(null);
       setRawConfig("");
@@ -218,7 +227,7 @@ export default function FrameworksPhase({ onNavigate }: Props) {
     } else {
       setRawConfig("");
     }
-  }, [safeId]);
+  }, [safeId, backendDown]);
 
   useEffect(() => {
     refreshFrameworks();
@@ -234,13 +243,13 @@ export default function FrameworksPhase({ onNavigate }: Props) {
   const needsPolling =
     framework && (!framework.installed || !framework.configured);
   useEffect(() => {
-    if (!safeId || !needsPolling) return;
+    if (!safeId || !needsPolling || backendDown) return;
     const id = setInterval(() => {
       loadChosen();
       refreshKeys();
     }, 5000);
     return () => clearInterval(id);
-  }, [safeId, needsPolling, loadChosen, refreshKeys]);
+  }, [safeId, needsPolling, loadChosen, refreshKeys, backendDown]);
 
   // Derive provider + api-key state
   const providerField = framework ? findProviderField(framework) : null;
@@ -415,6 +424,8 @@ export default function FrameworksPhase({ onNavigate }: Props) {
             + framework
           </button>
         </div>
+      ) : backendDown ? (
+        <BackendStoppedState message="Start the backend to choose a framework." />
       ) : frameworksLoading ? (
         <div className="text-xs text-text-muted">loading frameworks…</div>
       ) : null}

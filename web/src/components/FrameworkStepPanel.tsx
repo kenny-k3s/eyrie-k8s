@@ -21,6 +21,7 @@ import type { ApiKeyState } from "../lib/frameworkStatus";
 import type { InnerStepId } from "./FrameworkProgressTimeline";
 import { shellQuote } from "../lib/shell";
 import { COMMANDER_PREFILL_EVENT } from "../lib/events";
+import { useData } from "../lib/DataContext";
 
 interface Props {
   step: InnerStepId;
@@ -452,10 +453,12 @@ function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
 
 /** Checks gateway health via Eyrie's backend proxy to avoid CORS issues. */
 function HealthCheck({ url, frameworkId, onHealthChange }: { url: string; frameworkId: string; onHealthChange?: (healthy: boolean) => void }) {
+  const { backendDown } = useData();
   const [status, setStatus] = useState<"pending" | "ok" | "down">("pending");
   const onHealthChangeRef = useRef(onHealthChange);
   onHealthChangeRef.current = onHealthChange;
   useEffect(() => {
+    if (backendDown) return;
     let cancelled = false;
     const check = () => {
       fetch(`/api/registry/frameworks/${frameworkId}/health`)
@@ -476,7 +479,7 @@ function HealthCheck({ url, frameworkId, onHealthChange }: { url: string; framew
       cancelled = true;
       clearInterval(interval);
     };
-  }, [frameworkId, url]);
+  }, [backendDown, frameworkId, url]);
 
   const dot =
     status === "ok" ? "bg-green" : status === "down" ? "bg-red" : "bg-yellow animate-pulse";

@@ -4,10 +4,11 @@ import { ArrowLeft, Crown, User, Bot, RefreshCw } from "lucide-react";
 import type { HierarchyTree } from "../lib/types";
 import { fetchHierarchy } from "../lib/api";
 import { useData } from "../lib/DataContext";
+import BackendStoppedState from "./BackendStoppedState";
 
 // ─── Agent Card ───
 
-function AgentCard({ displayName, role, roleBadgeColor, roleIcon: RoleIcon, status, framework, project, onClick }: {
+function AgentCard({ displayName, role, roleBadgeColor, roleIcon: RoleIcon, status, framework, project, onClick, disabled }: {
   displayName: string;
   role: string;
   roleBadgeColor: string;
@@ -16,11 +17,13 @@ function AgentCard({ displayName, role, roleBadgeColor, roleIcon: RoleIcon, stat
   framework: string;
   project?: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-4 rounded border border-border p-4 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/30"
+      disabled={disabled}
+      className="flex w-full items-center gap-4 rounded border border-border p-4 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/30 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <div className={`flex h-9 w-9 items-center justify-center rounded-full shrink-0 ${
         role === "commander" ? "bg-purple-500/20" : role === "captain" ? "bg-accent/10" : "bg-text-muted/10"
@@ -50,12 +53,17 @@ function AgentCard({ displayName, role, roleBadgeColor, roleIcon: RoleIcon, stat
 
 export default function AgentsPage() {
   const navigate = useNavigate();
-  const { backendDown } = useData();
+  const { backendDown, backendStarting } = useData();
+  const backendUnavailable = backendDown || backendStarting;
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
   const hierarchyRef = useRef<HierarchyTree | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    if (backendUnavailable) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const data = await fetchHierarchy();
@@ -66,14 +74,18 @@ export default function AgentsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [backendUnavailable]);
 
   useEffect(() => {
-    if (backendDown) return;
+    if (backendUnavailable) return;
     refresh();
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
-  }, [refresh, backendDown]);
+  }, [refresh, backendUnavailable]);
+
+  if (backendUnavailable && !hierarchy) {
+    return <BackendStoppedState message="Start the backend to load agents." />;
+  }
 
   if (loading && !hierarchy) {
     return <div className="py-20 text-center text-xs text-text-muted">loading agents...</div>;
@@ -94,7 +106,7 @@ export default function AgentsPage() {
           <h1 className="text-xl font-bold"><span className="text-accent">&gt;</span> agents</h1>
           <p className="mt-1 text-xs text-text-muted">// manage your agent hierarchy</p>
         </div>
-        <button onClick={() => refresh()} disabled={loading}
+        <button onClick={() => refresh()} disabled={loading || backendUnavailable}
           className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text disabled:opacity-50">
           <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} /> refresh
         </button>
@@ -109,11 +121,11 @@ export default function AgentsPage() {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${backendDown ? "bg-red" : "bg-green"}`} />
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${backendUnavailable ? "bg-red" : "bg-green"}`} />
               <span className="font-medium text-text">Eyrie</span>
               <span className="rounded px-1.5 py-0.5 text-[9px] font-medium shrink-0 bg-purple-400/10 text-purple-400">commander</span>
             </div>
-            <div className="mt-1 text-text-muted">{backendDown ? "offline" : "built-in"} · chat via panel &rarr;</div>
+            <div className="mt-1 text-text-muted">{backendUnavailable ? "offline" : "built-in"} · chat via panel &rarr;</div>
           </div>
         </div>
       </div>
@@ -131,7 +143,8 @@ export default function AgentsPage() {
               <div className="flex items-center gap-2 px-1">
                 <span className={`h-1.5 w-1.5 rounded-full ${tree.project.status === "active" ? "bg-green" : "bg-text-muted"}`} />
                 <button onClick={() => navigate(`/projects/${tree.project.id}`)}
-                  className="text-xs font-medium text-text hover:text-accent transition-colors">
+                  disabled={backendUnavailable}
+                  className="text-xs font-medium text-text hover:text-accent transition-colors disabled:cursor-not-allowed disabled:opacity-50">
                   {tree.project.name}
                 </button>
                 {tree.project.goal && <span className="text-[10px] text-text-muted truncate">— {tree.project.goal}</span>}
@@ -148,6 +161,7 @@ export default function AgentsPage() {
                   framework={tree.captain.framework}
                   project={tree.project.name}
                   onClick={() => navigate(`/agents/${tree.captain!.name}`)}
+                  disabled={backendUnavailable}
                 />
               )}
 
@@ -163,6 +177,7 @@ export default function AgentsPage() {
                     framework={talon.framework}
                     project={tree.project.name}
                     onClick={() => navigate(`/agents/${talon.name}`)}
+                    disabled={backendUnavailable}
                   />
                 </div>
               ))}

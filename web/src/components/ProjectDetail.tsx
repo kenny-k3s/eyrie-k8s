@@ -118,7 +118,7 @@ export default function ProjectDetail() {
   useEffect(() => { refresh(); }, [refresh]);
 
   const refreshReviewTasks = useCallback(async () => {
-    if (!id) return;
+    if (!id || backendDown) return;
     try {
       const tasks = await fetchReviewTasks(id);
       setReviewTasks(tasks);
@@ -128,13 +128,14 @@ export default function ProjectDetail() {
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load review tasks");
     }
-  }, [id, selectedTaskID]);
+  }, [id, selectedTaskID, backendDown]);
 
   useEffect(() => {
     refreshReviewTasks();
   }, [refreshReviewTasks]);
 
   useEffect(() => {
+    if (backendDown) return;
     if (!selectedTaskID) {
       setSelectedArtifacts([]);
       setViewedArtifactIdx(-1);
@@ -146,7 +147,7 @@ export default function ProjectDetail() {
         setViewedArtifactIdx(arts.length > 0 ? arts.length - 1 : -1);
       })
       .catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load artifacts"));
-  }, [selectedTaskID]);
+  }, [selectedTaskID, backendDown]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -156,13 +157,23 @@ export default function ProjectDetail() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!backendDown) return;
+    if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+    if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+    pollRef.current.interval = null;
+    pollRef.current.timeout = null;
+    setStartingAgent("");
+    setLoadError("");
+  }, [backendDown]);
+
   // Poll while any instance is provisioning
   useEffect(() => {
     const hasProvisioning = instances.some((i) => i.status === "created" || i.status === "provisioning" || i.status === "starting");
-    if (!hasProvisioning) return;
+    if (!hasProvisioning || backendDown) return;
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);
-  }, [instances, refresh]);
+  }, [instances, refresh, backendDown]);
 
   // Subscribe to project events for real-time updates.
   // Only refresh the agent roster, NOT the full context (which would
@@ -213,9 +224,11 @@ export default function ProjectDetail() {
   const captainAgent = !captainInstance ? agents.find((a) => a.name === project.orchestrator_id) : null;
   const hasCaptain = captainInstance || captainAgent;
   const roleAgents = instances.filter((i) => i.hierarchy_role === "talon");
+  const reviewOpsDisabled = backendDown;
 
   // Helpers for starting stopped agents
   const startAgent = async (agentId: string, isInstance: boolean) => {
+    if (backendDown) return;
     setStartingAgent(agentId);
     try {
       if (isInstance) await instanceAction(agentId, "start");
@@ -288,6 +301,7 @@ export default function ProjectDetail() {
         <div className="flex-1" />
         <button
           onClick={async () => {
+            if (backendDown) return;
             if (confirm("delete this project?")) {
               try {
                 await deleteProject(project.id);
@@ -298,14 +312,15 @@ export default function ProjectDetail() {
               }
             }
           }}
-          className="rounded p-1.5 text-text-muted transition-colors hover:bg-red/10 hover:text-red"
+          disabled={backendDown}
+          className="rounded p-1.5 text-text-muted transition-colors hover:bg-red/10 hover:text-red disabled:cursor-not-allowed disabled:opacity-40"
           title="delete project"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      {loadError && (
+      {loadError && !backendDown && (
         <div className="border-b border-red/30 bg-red/5 px-4 py-2 text-xs text-red">{loadError}</div>
       )}
 
@@ -359,7 +374,8 @@ export default function ProjectDetail() {
               {!hasCaptain && (
                 <button
                   onClick={() => setShowSetOrchestrator(true)}
-                  className="flex items-center gap-1 text-[10px] text-accent hover:text-accent/80"
+                  disabled={backendDown}
+                  className="flex items-center gap-1 text-[10px] text-accent hover:text-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Crown className="h-2.5 w-2.5" /> assign
                 </button>
@@ -396,7 +412,8 @@ export default function ProjectDetail() {
               <span className="text-[10px] font-medium text-text-muted">// talons ({roleAgents.length})</span>
               <button
                 onClick={() => setShowAddAgent(true)}
-                className="flex items-center gap-1 text-[10px] text-accent hover:text-accent/80"
+                disabled={backendDown}
+                className="flex items-center gap-1 text-[10px] text-accent hover:text-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Plus className="h-2.5 w-2.5" /> add
               </button>
@@ -426,7 +443,8 @@ export default function ProjectDetail() {
               <select
                 value={reviewKind}
                 onChange={(e) => setReviewKind(e.target.value as ReviewTaskKind)}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+                disabled={reviewOpsDisabled}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="triage_issue">triage_issue</option>
                 <option value="review_pr">review_pr</option>
@@ -436,18 +454,20 @@ export default function ProjectDetail() {
               <input
                 value={reviewRepo}
                 onChange={(e) => setReviewRepo(e.target.value)}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+                disabled={reviewOpsDisabled}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text disabled:cursor-not-allowed disabled:opacity-50"
               />
               <input
                 type="number"
                 min={1}
                 value={reviewTarget}
                 onChange={(e) => setReviewTarget(Number(e.target.value))}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+                disabled={reviewOpsDisabled}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text disabled:cursor-not-allowed disabled:opacity-50"
               />
               <button
                 onClick={async () => {
-                  if (!id) return;
+                  if (!id || reviewOpsDisabled) return;
                   try {
                     const created = await createReviewTask({
                       project_id: id,
@@ -462,10 +482,14 @@ export default function ProjectDetail() {
                     setLoadError(err instanceof Error ? err.message : "Failed to create review task");
                   }
                 }}
-                className="w-full rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white hover:bg-accent/80"
+                disabled={reviewOpsDisabled || !reviewRepo.trim() || reviewTarget < 1}
+                className="w-full rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 create task
               </button>
+              {reviewOpsDisabled && (
+                <div className="text-[10px] text-text-muted">start the backend to create review tasks</div>
+              )}
             </div>
             <div className="max-h-36 space-y-1 overflow-y-auto">
               {reviewTasks.map((task) => (
@@ -485,6 +509,7 @@ export default function ProjectDetail() {
             {selectedTaskID && (
               <button
                 onClick={async () => {
+                  if (reviewOpsDisabled) return;
                   try {
                     await runReviewTask(selectedTaskID);
                     await refreshReviewTasks();
@@ -495,7 +520,8 @@ export default function ProjectDetail() {
                     setLoadError(err instanceof Error ? err.message : "Failed to run task");
                   }
                 }}
-                className="w-full rounded border border-border px-2 py-1 text-[10px] text-text-muted hover:bg-surface-hover"
+                disabled={reviewOpsDisabled}
+                className="w-full rounded border border-border px-2 py-1 text-[10px] text-text-muted hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 run selected task
               </button>
@@ -541,6 +567,7 @@ export default function ProjectDetail() {
             </div>
             <button
               onClick={async () => {
+                if (backendDown) return;
                 const talonCount = roleAgents.length;
                 const msg = talonCount > 0
                   ? `reset project? this will clear chat, reset agent sessions, and destroy ${talonCount} talon${talonCount !== 1 ? "s" : ""}.`
@@ -554,7 +581,8 @@ export default function ProjectDetail() {
                   setLoadError(e instanceof Error ? e.message : "reset failed");
                 }
               }}
-              className="flex w-full items-center justify-center gap-1.5 rounded border border-red/30 px-2 py-1.5 text-[10px] text-red/70 hover:bg-red/10 hover:text-red"
+              disabled={backendDown}
+              className="flex w-full items-center justify-center gap-1.5 rounded border border-red/30 px-2 py-1.5 text-[10px] text-red/70 hover:bg-red/10 hover:text-red disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Trash2 className="h-3 w-3" /> reset project
             </button>
@@ -619,7 +647,7 @@ export default function ProjectDetail() {
                       <span className="font-medium text-text">{a.name}</span>
                       <span className="text-text-muted">{a.role}</span>
                       <button
-                        disabled={!!startingAgent}
+                        disabled={!!startingAgent || backendDown}
                         onClick={() => startAgent(a.id, a.isInstance)}
                         className="rounded bg-green px-2 py-0.5 text-[10px] font-medium text-white hover:bg-green/80 disabled:opacity-50"
                       >
@@ -630,8 +658,9 @@ export default function ProjectDetail() {
                 </div>
                 {needsStart.length > 1 && (
                   <button
-                    disabled={!!startingAgent}
+                    disabled={!!startingAgent || backendDown}
                     onClick={async () => {
+                      if (backendDown) return;
                       setStartingAgent("all");
                       // allSettled (not all) so one failure doesn't abort the
                       // rest — start as many as we can, then surface which

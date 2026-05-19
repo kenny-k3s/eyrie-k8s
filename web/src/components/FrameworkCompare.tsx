@@ -8,7 +8,7 @@
 // shell sandboxing, etc.) are properties of the codebase, not runtime state.
 // They change only when a new version ships.
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { RefreshCw, AlertCircle, ChevronDown, ChevronRight, Package } from "lucide-react";
 import { useData } from "../lib/DataContext";
@@ -17,6 +17,7 @@ import { formatBytes } from "../lib/format";
 import type { Framework } from "../lib/types";
 import { fetchFrameworks } from "../lib/api";
 import FrameworkCard from "./FrameworkCard";
+import BackendStoppedState from "./BackendStoppedState";
 
 // ── Static capability data ───────────────────────────────────────────────
 
@@ -278,7 +279,7 @@ function FeatureMatrix({
 
 export default function FrameworkCompare() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { agents } = useData();
+  const { agents, backendDown } = useData();
   const highlightId = searchParams.get("highlight");
   const compareMode = searchParams.get("compare") === "true";
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -308,18 +309,23 @@ export default function FrameworkCompare() {
       compareRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [highlightId, compareMode, loading]);
-  useEffect(() => {
-    loadFrameworks();
-  }, []);
-
-  const loadFrameworks = async (refresh = false) => {
+  const loadFrameworks = useCallback(async (refresh = false) => {
+    if (backendDown) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     try {
       setLoading(true); setError(null);
       setFrameworks(await fetchFrameworks(refresh));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load frameworks");
     } finally { setLoading(false); }
-  };
+  }, [backendDown]);
+
+  useEffect(() => {
+    loadFrameworks();
+  }, [loadFrameworks]);
 
   const [featuresExpanded, setFeaturesExpanded] = useState(compareMode);
   const [securityExpanded, setSecurityExpanded] = useState(compareMode);
@@ -352,7 +358,7 @@ export default function FrameworkCompare() {
         </div>
         <button
           onClick={() => loadFrameworks(true)}
-          disabled={loading}
+          disabled={loading || backendDown}
           className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -360,7 +366,11 @@ export default function FrameworkCompare() {
         </button>
       </div>
 
-      {error && (
+      {backendDown && frameworks.length === 0 && (
+        <BackendStoppedState message="Start the backend to load frameworks." />
+      )}
+
+      {!backendDown && error && (
         <div className="rounded border border-red/30 bg-red/5 px-4 py-3 flex items-start gap-2">
           <AlertCircle className="h-3.5 w-3.5 text-red mt-0.5 flex-shrink-0" />
           <div>
@@ -370,7 +380,7 @@ export default function FrameworkCompare() {
         </div>
       )}
 
-      {loading && !frameworks.length && (
+      {!backendDown && loading && !frameworks.length && (
         <div className="py-12 text-center text-xs text-text-muted">loading frameworks...</div>
       )}
 

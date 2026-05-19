@@ -43,10 +43,12 @@ export interface PhaseStatus {
  * (including per-framework config); this is a summary-level data source.
  */
 function useFrameworksSummary() {
+  const { backendPollingPaused } = useData();
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [keys, setKeys] = useState<KeyEntry[]>([]);
 
   useEffect(() => {
+    if (backendPollingPaused) return;
     let cancelled = false;
     const load = () =>
       Promise.allSettled([fetchFrameworks(), fetchKeys()]).then(
@@ -62,7 +64,7 @@ function useFrameworksSummary() {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [backendPollingPaused]);
 
   return { frameworks, keys };
 }
@@ -91,7 +93,7 @@ function anyFrameworkReady(frameworks: Framework[], keys: KeyEntry[]): boolean {
 }
 
 export default function OnboardingFlow() {
-  const { projects } = useData();
+  const { projects, backendPollingPaused } = useData();
   const { frameworks, keys } = useFrameworksSummary();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -100,6 +102,7 @@ export default function OnboardingFlow() {
   const [commanderHealthy, setCommanderHealthy] = useState<boolean | null>(null);
   const prevHealthy = useRef<boolean | null>(null);
   useEffect(() => {
+    if (backendPollingPaused) return;
     let cancelled = false;
     const interval = commanderHealthy === true ? 15_000 : 3_000;
     const check = () => {
@@ -122,7 +125,7 @@ export default function OnboardingFlow() {
     check();
     const id = setInterval(check, interval);
     return () => { cancelled = true; clearInterval(id); };
-  }, [commanderHealthy]);
+  }, [commanderHealthy, backendPollingPaused]);
 
   const frameworksReady = useMemo(
     () => anyFrameworkReady(frameworks, keys),

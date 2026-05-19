@@ -61,7 +61,8 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const [nameInput, setNameInput] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
-  const { setPendingAction } = useData();
+  const { backendDown, backendStarting, setPendingAction } = useData();
+  const backendUnavailable = backendDown || backendStarting;
 
   const actionControllerRef = useRef<AbortController | null>(null);
 
@@ -72,6 +73,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
 
   const handleAction = useCallback(
     async (action: "start" | "stop" | "restart") => {
+      if (backendUnavailable) return;
       setActionPending(action);
       setPendingAction(agent.name, action);
       const controller = new AbortController();
@@ -102,26 +104,35 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
         setPendingAction(agent.name, null);
       }
     },
-    [agent.name, onRefresh, setPendingAction],
+    [agent.name, backendUnavailable, onRefresh, setPendingAction],
   );
 
   useEffect(() => {
     if (tab === "config") {
+      if (backendUnavailable) {
+        setLogs([]);
+        return;
+      }
       setLogs([]);
       const close = streamLogs(agent.name, (entry) => {
         setLogs((prev) => [...prev.slice(-200), entry]);
       });
       return close;
     }
-  }, [tab, agent.name, agent.alive]);
+  }, [tab, agent.name, agent.alive, backendUnavailable]);
 
   useEffect(() => {
+    if (backendUnavailable) {
+      setConfig(null);
+      setConfigError(null);
+      return;
+    }
     setConfig(null);
     setConfigError(null);
     fetchAgentConfig(agent.name)
       .then(setConfig)
       .catch((err) => setConfigError(err.message ?? "Failed to load config"));
-  }, [agent.name, agent.alive]);
+  }, [agent.name, agent.alive, backendUnavailable]);
 
   useEffect(() => {
     // Fetch framework detail with schema for inline editing
@@ -146,27 +157,27 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
               icon={<Play className="h-3.5 w-3.5" />}
               label={actionPending === "start" ? "starting..." : "start"}
               onClick={() => handleAction("start")}
-              disabled={!!actionPending}
+              disabled={backendUnavailable || !!actionPending}
             />
           ) : (
             <>
               <ActionButton
                 icon={<TerminalIcon className="h-3.5 w-3.5" />}
                 label="terminal"
-                onClick={() => setShowTerminal(true)}
-                disabled={false}
+                onClick={() => { if (!backendUnavailable) setShowTerminal(true); }}
+                disabled={backendUnavailable}
               />
               <ActionButton
                 icon={actionPending === "restart" ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-yellow-400/30 border-t-yellow-400" /> : <RotateCcw className="h-3.5 w-3.5" />}
                 label={actionPending === "restart" ? "restarting..." : "restart"}
                 onClick={() => handleAction("restart")}
-                disabled={!!actionPending}
+                disabled={backendUnavailable || !!actionPending}
               />
               <ActionButton
                 icon={<Square className="h-3.5 w-3.5" />}
                 label={actionPending === "stop" ? "stopping..." : "stop"}
                 onClick={() => handleAction("stop")}
-                disabled={!!actionPending}
+                disabled={backendUnavailable || !!actionPending}
                 variant={actionPending === "stop" ? undefined : "danger"}
               />
             </>
@@ -1058,7 +1069,7 @@ function ActionButton({
   variant?: "default" | "danger";
 }) {
   const base =
-    "flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50";
+    "flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
   const styles =
     variant === "danger"
       ? "border border-red/30 text-red hover:bg-red/10"

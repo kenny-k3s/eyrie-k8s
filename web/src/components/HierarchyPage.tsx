@@ -5,6 +5,7 @@ import type { HierarchyTree, ProjectTree, Framework } from "../lib/types";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import { fetchHierarchy, fetchFrameworks } from "../lib/api";
 import { useData } from "../lib/DataContext";
+import BackendStoppedState from "./BackendStoppedState";
 
 interface DashboardMetrics {
   active_projects: number;
@@ -236,13 +237,19 @@ function GuideView({ hierarchy }: {
   hierarchy: HierarchyTree | null;
 }) {
   const navigate = useNavigate();
-  const { agents } = useData();
+  const { agents, backendDown, backendStarting } = useData();
+  const backendUnavailable = backendDown || backendStarting;
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [fwLoading, setFwLoading] = useState(true);
   const [fwError, setFwError] = useState<string | null>(null);
   const [fwExpanded, setFwExpanded] = useState(false);
 
   const loadFrameworks = useCallback(() => {
+    if (backendUnavailable) {
+      setFwLoading(false);
+      setFwError(null);
+      return;
+    }
     setFwLoading(true);
     setFwError(null);
     fetchFrameworks()
@@ -251,7 +258,7 @@ function GuideView({ hierarchy }: {
         setFwError(e instanceof Error ? e.message : "failed to load frameworks");
       })
       .finally(() => setFwLoading(false));
-  }, []);
+  }, [backendUnavailable]);
 
   useEffect(() => { loadFrameworks(); }, [loadFrameworks]);
 
@@ -295,13 +302,18 @@ function GuideView({ hierarchy }: {
         <p className="text-xs text-text-secondary ml-7">
           Frameworks are the AI agent runtimes that Eyrie manages. Pick one to get started.
         </p>
-        {fwLoading ? (
+        {backendUnavailable ? (
+          <div className="ml-7">
+            <BackendStoppedState message="Start the backend to load frameworks." />
+          </div>
+        ) : fwLoading ? (
           <div className="ml-7 py-4 text-xs text-text-muted">loading frameworks...</div>
         ) : fwError ? (
           <div className="ml-7 rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red flex items-center gap-2">
             <span className="flex-1">failed to load frameworks: {fwError}</span>
             <button
               onClick={loadFrameworks}
+              disabled={backendUnavailable}
               className="rounded border border-red/30 px-2 py-0.5 text-[10px] text-red hover:bg-red/10 transition-colors"
             >
               retry
@@ -416,12 +428,14 @@ function ProjectsTab({
   fetchError,
   metrics,
   refresh,
+  backendUnavailable,
 }: {
   hierarchy: HierarchyTree | null;
   loading: boolean;
   fetchError: string | null;
   metrics: DashboardMetrics | null;
   refresh: () => Promise<void>;
+  backendUnavailable: boolean;
 }) {
   const navigate = useNavigate();
   if (loading && !hierarchy) {
@@ -435,7 +449,7 @@ function ProjectsTab({
           {fetchError}
         </div>
         <div>
-          <button onClick={() => refresh()} disabled={loading} className="text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50">
+          <button onClick={() => refresh()} disabled={loading || backendUnavailable} className="text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50">
             <RefreshCw className={`inline h-3 w-3 mr-1 ${loading ? "animate-spin" : ""}`} /> retry
           </button>
         </div>
@@ -469,14 +483,15 @@ function ProjectsTab({
         <div className="flex items-center gap-2">
           <button
             onClick={() => navigate("/projects")}
-            className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text"
+            disabled={backendUnavailable}
+            className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-3 w-3" />
             new project
           </button>
           <button
             onClick={() => refresh()}
-            disabled={loading}
+            disabled={loading || backendUnavailable}
             className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
           >
             <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
@@ -484,7 +499,8 @@ function ProjectsTab({
           </button>
           <button
             onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
-            className="flex items-center gap-1.5 rounded border border-purple-400/30 px-3 py-1.5 text-xs text-purple-400 transition-colors hover:bg-purple-400/10"
+            disabled={backendUnavailable}
+            className="flex items-center gap-1.5 rounded border border-purple-400/30 px-3 py-1.5 text-xs text-purple-400 transition-colors hover:bg-purple-400/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <MessageSquare className="h-3 w-3" />
             ask commander
@@ -526,13 +542,15 @@ function ProjectsTab({
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate("/mission-control/agents")}
-            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+            disabled={backendUnavailable}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             manage agents &rarr;
           </button>
           <button
             onClick={() => navigate("/agents/compare")}
-            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+            disabled={backendUnavailable}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
             compare agents &rarr;
           </button>
@@ -575,7 +593,8 @@ function ProjectsTab({
 // ─── Main Page ───
 
 export default function HierarchyPage() {
-  const { backendDown } = useData();
+  const { backendDown, backendStarting } = useData();
+  const backendUnavailable = backendDown || backendStarting;
 
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
   const hierarchyRef = useRef<HierarchyTree | null>(null);
@@ -584,6 +603,10 @@ export default function HierarchyPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
   const refresh = useCallback(async () => {
+    if (backendUnavailable) {
+      setLoading(false);
+      return;
+    }
     try {
       setFetchError(null);
       setLoading(true);
@@ -598,21 +621,21 @@ export default function HierarchyPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [backendUnavailable]);
 
   useEffect(() => {
-    if (backendDown) return;
+    if (backendUnavailable) return;
     refresh();
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
-  }, [refresh, backendDown]);
+  }, [refresh, backendUnavailable]);
 
   useEffect(() => {
-    if (!hierarchy || backendDown) return;
+    if (!hierarchy || backendUnavailable) return;
     const controller = new AbortController();
     fetch("/api/metrics", { signal: controller.signal }).then((r) => { if (r.ok) return r.json(); throw new Error(`metrics: ${r.status}`); }).then(setMetrics).catch(() => {});
     return () => { controller.abort(); };
-  }, [hierarchy, backendDown]);
+  }, [hierarchy, backendUnavailable]);
 
   // Show project dashboard when commander is set, guide view otherwise
   const hasCommander = hierarchy?.commander;
@@ -625,7 +648,7 @@ export default function HierarchyPage() {
         </h1>
         <button
           onClick={() => refresh()}
-          disabled={loading}
+          disabled={loading || backendUnavailable}
           className="flex items-center gap-1.5 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
@@ -641,6 +664,7 @@ export default function HierarchyPage() {
             fetchError={fetchError}
             metrics={metrics}
             refresh={refresh}
+            backendUnavailable={backendUnavailable}
           />
         ) : (
           <GuideView hierarchy={hierarchy} />

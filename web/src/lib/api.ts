@@ -80,6 +80,57 @@ export async function fetchAgents(): Promise<AgentInfo[]> {
   return res.json();
 }
 
+export interface DevBackendStartResponse {
+  status: "started" | "starting" | "already_running";
+  mode?: DevBackendStartMode;
+  log_path?: string;
+}
+
+export type DevBackendStartMode = "binary" | "make-dev";
+
+export interface DevBackendStopResponse {
+  status: "stopping" | "already_stopped";
+}
+
+export interface DevBackendStatusResponse {
+  backend_reachable: boolean;
+  owned_backend_pid: number | null;
+  stopped_by_user: boolean;
+}
+
+export async function fetchDevBackendStatus(): Promise<DevBackendStatusResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/backend-status`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to fetch backend status: ${res.statusText}`);
+  }
+  return body;
+}
+
+export async function startDevBackend(mode: DevBackendStartMode = "binary"): Promise<DevBackendStartResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/start-backend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to start backend: ${res.statusText}`);
+  }
+  return body;
+}
+
+export async function stopDevBackend(): Promise<DevBackendStopResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/stop-backend`, {
+    method: "POST",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to stop backend: ${res.statusText}`);
+  }
+  return body;
+}
+
 export interface AgentConfig {
   content: string;
   format: string;

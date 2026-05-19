@@ -55,7 +55,7 @@ export interface ProjectChatProps {
 }
 
 export function ProjectChat({ projectId, participants }: ProjectChatProps) {
-  const { agents, instances } = useData();
+  const { agents, instances, backendDown } = useData();
   const displayNames = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agents) { if (a.display_name) map.set(a.name, a.display_name); }
@@ -108,6 +108,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   // Load messages on mount + check if a response is in-flight
   const [chatLoaded, setChatLoaded] = useState(false);
   useEffect(() => {
+    if (backendDown) {
+      setChatLoaded(true);
+      return;
+    }
     setChatLoaded(false);
     Promise.all([
       fetchProjectChat(projectId),
@@ -117,12 +121,13 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       setBackgroundStreaming(status.streaming);
       setChatLoaded(true);
     }).catch((err) => { console.error(err); setChatLoaded(true); });
-  }, [projectId]);
+  }, [projectId, backendDown]);
 
   // Poll for new messages — fast (1s) when agent is responding in
   // background, slow (4s) when idle. Checks status each cycle to
   // detect when the response completes.
   useEffect(() => {
+    if (backendDown) return;
     if (sending) return; // SSE handles updates while we're the sender
     const interval = backgroundStreaming ? 1000 : 4000;
     const id = setInterval(() => {
@@ -145,7 +150,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       }).catch(() => {});
     }, interval);
     return () => clearInterval(id);
-  }, [projectId, sending, backgroundStreaming]);
+  }, [projectId, sending, backgroundStreaming, backendDown]);
 
   // Auto-scroll handled by useAutoScroll above
 
@@ -153,6 +158,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     abortRef.current?.abort();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!backendDown) return;
+    abortRef.current?.abort();
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, [backendDown]);
 
   // Helper: mark agent as streaming. If a different agent was streaming,
   // flush its parts into messages first so they don't disappear.
@@ -195,7 +206,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     participants.filter((p) => !filter || p.role.toLowerCase().includes(filter) || p.name.toLowerCase().includes(filter));
 
   const send = useCallback((text: string) => {
-    if (!text || sending) return;
+    if (!text || sending || backendDown) return;
     setSending(true);
     setChatError("");
     clearStreaming();
@@ -313,7 +324,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       }
     });
     abortRef.current = ctrl;
-  }, [sending, projectId]);
+  }, [sending, backendDown, projectId]);
 
   const handleSend = useCallback(() => {
     const msg = input.trim();
@@ -332,8 +343,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     // user can see what the agent was doing when they stopped it.
     // Streaming state is cleared on the next send().
     // Cancel the backend's detached orchestration so the agent stops too
-    stopProjectChat(projectId).catch(() => {});
-  }, [projectId]);
+    if (!backendDown) stopProjectChat(projectId).catch(() => {});
+  }, [projectId, backendDown]);
 
   // Auto-start project chat when loaded with no messages.
   // WHY autoStartedRef: Prevents double-fire in StrictMode. The ref is set
@@ -347,11 +358,11 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     autoStartedRef.current = false;
   }, [projectId]);
   useEffect(() => {
-    if (chatLoaded && !autoStartedRef.current && !sending && messages.length === 0) {
+    if (chatLoaded && !backendDown && !autoStartedRef.current && !sending && messages.length === 0) {
       autoStartedRef.current = true;
       send("Let's get started on this project.");
     }
-  }, [chatLoaded, sending, messages.length, send]);
+  }, [chatLoaded, backendDown, sending, messages.length, send]);
 
   // Sort messages: system before user when timestamps are within 1 second
   const sortedMessages = useMemo(() => [...messages].sort((a, b) => {
@@ -536,12 +547,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
           className="flex-1 resize-none rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-          placeholder="type a message... (@ to mention)"
-          disabled={sending}
+          placeholder={backendDown ? "backend is stopped" : "type a message... (@ to mention)"}
+          disabled={sending || backendDown}
         />
         <button
           onClick={handleSend}
-          disabled={sending || !input.trim()}
+          disabled={sending || backendDown || !input.trim()}
           className="rounded bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
         >
           <Send className="h-3.5 w-3.5" />

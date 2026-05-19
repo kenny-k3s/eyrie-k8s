@@ -49,7 +49,7 @@ function parseProjectRoute(pathname: string) {
 }
 
 export default function Sidebar() {
-  const { agents, projects, instances, pendingActions } = useData();
+  const { agents, projects, instances, pendingActions, backendDown, backendPollingPaused } = useData();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
@@ -64,6 +64,7 @@ export default function Sidebar() {
   // sidebar even when no agent is running (discovery only returns running ones).
   const [installedFrameworks, setInstalledFrameworks] = useState<string[]>([]);
   useEffect(() => {
+    if (backendDown || backendPollingPaused) return;
     let cancelled = false;
     const load = () => {
       fetchFrameworks()
@@ -79,7 +80,7 @@ export default function Sidebar() {
     load();
     const id = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [backendDown, backendPollingPaused]);
 
   // Create a 1x1 transparent image for drag operations to prevent
   // Chrome's split-view suggestion that appears when dragging <a> tags

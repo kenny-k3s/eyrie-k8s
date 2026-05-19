@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import type { Framework } from "./types";
 import { fetchFrameworks } from "./api";
 import { getFrameworkStatus } from "./frameworkStatus";
+import { useData } from "./DataContext";
 
 interface InstalledFrameworksResult {
   /** Frameworks whose binary is on disk. */
@@ -22,10 +23,15 @@ interface InstalledFrameworksResult {
 }
 
 export function useInstalledFrameworks(): InstalledFrameworksResult {
+  const { backendDown } = useData();
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (backendDown) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     fetchFrameworks()
@@ -40,7 +46,7 @@ export function useInstalledFrameworks(): InstalledFrameworksResult {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [backendDown]);
 
   return {
     frameworks,
