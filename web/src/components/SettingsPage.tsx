@@ -3,13 +3,16 @@ import { useFont, FONT_OPTIONS, type FontId } from "../lib/useFont";
 import { useTheme, type Theme } from "../lib/useTheme";
 import { useLatencyThresholds } from "../lib/useLatencyThresholds";
 import { useState, useEffect, useRef } from "react";
-import { Minus, Plus, RotateCcw, Moon, Sun, Check } from "lucide-react";
+import { Minus, Plus, RotateCcw, Moon, Sun, Check, Zap, Wrench } from "lucide-react";
 import ApiKeysSection from "./ApiKeysSection";
+import { useBackendStartMode } from "../lib/useBackendStartMode";
+import type { DevBackendStartMode } from "../lib/api";
 
 export default function SettingsPage() {
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
   const { font, setFont, reset: resetFont } = useFont();
   const { theme, setTheme } = useTheme();
+  const { mode: backendStartMode, setMode: setBackendStartMode } = useBackendStartMode();
   const { thresholds, setThresholds, reset: resetThresholds, defaults } = useLatencyThresholds();
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -178,6 +181,36 @@ export default function SettingsPage() {
             <Check className="h-2.5 w-2.5" /> saved
           </div>
         </div>
+
+        {import.meta.env.DEV && (
+          <div className="rounded border border-border bg-surface p-4 space-y-3">
+            <div>
+              <h3 className="text-xs font-medium text-text">backend starter</h3>
+              <p className="text-[10px] text-text-muted mt-0.5">
+                start button mode
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {([
+                { id: "binary" as DevBackendStartMode, label: "binary", Icon: Zap },
+                { id: "make-dev" as DevBackendStartMode, label: "make dev", Icon: Wrench },
+              ]).map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setBackendStartMode(id)}
+                  className={`flex items-center gap-2 rounded border px-3 py-2 text-xs font-medium transition-colors ${
+                    backendStartMode === id
+                      ? "border-accent bg-accent/5 text-accent"
+                      : "border-border hover:border-text-muted/50 text-text-secondary hover:text-text"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Font */}

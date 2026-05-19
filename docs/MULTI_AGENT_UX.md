@@ -1,5 +1,5 @@
-**Multi-Agent UX in the CLAW Ecosystem**  
-**Current State, ZeroClaw Sub-Agents, RFC #5890 Analysis, and the Future of Factory Layers**  
+**Multi-Agent UX in the CLAW Ecosystem**
+**Current State, ZeroClaw Sub-Agents, RFC #5890 Analysis, and the Future of Factory Layers**
 *April 2026 Research Report (Grok 4.3 beta)*
 
 Status: historical research reference

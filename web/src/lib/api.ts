@@ -13,6 +13,9 @@ import type {
   PersonaCategory,
   Project,
   CreateProjectRequest,
+  ReviewTask,
+  ReviewArtifact,
+  ReviewTaskKind,
   HierarchyTree,
   MeshStatus,
   ProjectChatMessage,
@@ -78,6 +81,57 @@ export async function fetchAgents(): Promise<AgentInfo[]> {
   const res = await fetchWithTimeout(`${BASE}/api/agents`);
   if (!res.ok) throw new Error(`Failed to fetch agents: ${res.statusText}`);
   return res.json();
+}
+
+export interface DevBackendStartResponse {
+  status: "started" | "starting" | "already_running";
+  mode?: DevBackendStartMode;
+  log_path?: string;
+}
+
+export type DevBackendStartMode = "binary" | "make-dev";
+
+export interface DevBackendStopResponse {
+  status: "stopping" | "already_stopped";
+}
+
+export interface DevBackendStatusResponse {
+  backend_reachable: boolean;
+  owned_backend_pid: number | null;
+  stopped_by_user: boolean;
+}
+
+export async function fetchDevBackendStatus(): Promise<DevBackendStatusResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/backend-status`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to fetch backend status: ${res.statusText}`);
+  }
+  return body;
+}
+
+export async function startDevBackend(mode: DevBackendStartMode = "binary"): Promise<DevBackendStartResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/start-backend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to start backend: ${res.statusText}`);
+  }
+  return body;
+}
+
+export async function stopDevBackend(): Promise<DevBackendStopResponse> {
+  const res = await fetchWithTimeout(`${BASE}/__eyrie-dev/stop-backend`, {
+    method: "POST",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Failed to stop backend: ${res.statusText}`);
+  }
+  return body;
 }
 
 export interface AgentConfig {
@@ -544,6 +598,50 @@ export async function resetProject(id: string): Promise<void> {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to reset project: ${res.statusText}`);
   }
+}
+
+export async function createReviewTask(req: {
+  project_id: string;
+  domain: string;
+  kind: ReviewTaskKind;
+  repo: string;
+  target_number: number;
+  runner_kind?: string;
+}): Promise<ReviewTask> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to create review task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchReviewTasks(projectId: string): Promise<ReviewTask[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks?project_id=${encodeURIComponent(projectId)}`);
+  if (!res.ok) throw new Error(`Failed to fetch review tasks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function runReviewTask(taskID: string): Promise<ReviewTask> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks/${encodeURIComponent(taskID)}/run`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to run review task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchReviewTaskArtifacts(taskID: string): Promise<ReviewArtifact[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks/${encodeURIComponent(taskID)}/artifacts`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to fetch artifacts: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 // Hierarchy API

@@ -7,8 +7,11 @@ import {
   installPersona,
 } from "../lib/api";
 import PersonaCard from "./PersonaCard";
+import { useData } from "../lib/DataContext";
+import BackendStoppedState from "./BackendStoppedState";
 
 export default function PersonasPage() {
+  const { backendDown } = useData();
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [categories, setCategories] = useState<PersonaCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -17,6 +20,11 @@ export default function PersonasPage() {
   const [installing, setInstalling] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (backendDown) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -31,13 +39,14 @@ export default function PersonasPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [backendDown]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const handleInstall = useCallback(async (personaId: string) => {
+    if (backendDown) return;
     setError(null);
     try {
       setInstalling(personaId);
@@ -54,7 +63,7 @@ export default function PersonasPage() {
     } catch (e) {
       setError("Installed but failed to refresh persona list");
     }
-  }, []);
+  }, [backendDown]);
 
   const filtered = activeCategory
     ? personas.filter((p) => p.category === activeCategory)
@@ -78,7 +87,7 @@ export default function PersonasPage() {
         </div>
         <button
           onClick={load}
-          disabled={loading}
+          disabled={loading || backendDown}
           className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
         >
           <RefreshCw
@@ -117,7 +126,11 @@ export default function PersonasPage() {
       </div>
 
       {/* Error */}
-      {error && (
+      {backendDown && personas.length === 0 && (
+        <BackendStoppedState message="Start the backend to load personas." />
+      )}
+
+      {!backendDown && error && (
         <div className="rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
           {error}
         </div>
@@ -153,7 +166,7 @@ export default function PersonasPage() {
       </div>
 
       {/* Loading */}
-      {loading && personas.length === 0 && (
+      {!backendDown && loading && personas.length === 0 && (
         <div className="py-12 text-center text-xs text-text-muted">
           <Sparkles className="w-6 h-6 mx-auto mb-2 animate-pulse text-accent" />
           discovering personas...
@@ -161,7 +174,7 @@ export default function PersonasPage() {
       )}
 
       {/* Empty state */}
-      {!loading && personas.length === 0 && (
+      {!backendDown && !loading && personas.length === 0 && (
         <div className="rounded border border-border bg-surface p-8 text-center">
           <Users className="w-8 h-8 mx-auto mb-3 text-text-muted" />
           <p className="text-xs text-text-muted">

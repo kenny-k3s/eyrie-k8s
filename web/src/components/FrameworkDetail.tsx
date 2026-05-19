@@ -17,6 +17,7 @@ import ConfigFieldsForm from "./ConfigFieldsForm";
 import { AddAgentDialog } from "./AddAgentDialog";
 import { shellQuote } from "../lib/shell";
 import { CHAT_COMMANDS } from "../lib/chatCommands";
+import BackendStoppedState from "./BackendStoppedState";
 
 
 function statusDotClass(alive: boolean, providerStatus?: string): string {
@@ -28,7 +29,7 @@ function statusDotClass(alive: boolean, providerStatus?: string): string {
 export default function FrameworkDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents, refresh: refreshGlobal } = useData();
+  const { agents, refresh: refreshGlobal, backendDown } = useData();
   const termRef = useRef<TerminalHandle>(null);
 
   // ── Framework data ──────────────────────────────────────────────────
@@ -38,17 +39,19 @@ export default function FrameworkDetail() {
   const [pendingUninstall, setPendingUninstall] = useState(false);
 
   const loadFramework = useCallback(async () => {
-    if (!id) return;
+    if (!id || backendDown) return;
     try {
+      setError("");
       setFramework(await getFrameworkDetail(id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load framework");
     }
-  }, [id]);
+  }, [id, backendDown]);
 
   useEffect(() => { loadFramework(); }, [loadFramework]);
 
   const handleRefresh = async () => {
+    if (backendDown) return;
     setRefreshing(true);
     try {
       await loadFramework();
@@ -76,7 +79,7 @@ export default function FrameworkDetail() {
     (framework && (!framework.installed || !framework.configured)) || pendingUninstall;
 
   useEffect(() => {
-    if (!id || !needsPolling) return;
+    if (!id || !needsPolling || backendDown) return;
     const interval = setInterval(async () => {
       try {
         const updated = await getFrameworkDetail(id);
@@ -92,7 +95,7 @@ export default function FrameworkDetail() {
       } catch { /* silent */ }
     }, 3000);
     return () => clearInterval(interval);
-  }, [id, needsPolling, pendingUninstall, refreshGlobal]);
+  }, [id, needsPolling, pendingUninstall, refreshGlobal, backendDown]);
 
   // ── Reset / Uninstall ────────────────────────────────────────────────
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -170,6 +173,15 @@ export default function FrameworkDetail() {
     setUninstallPurge(false);
   };
 
+  if (backendDown && !framework) {
+    return (
+      <div className="space-y-4">
+        <Link to="/frameworks" className="text-xs text-text-muted hover:text-text">&lt; back</Link>
+        <BackendStoppedState message="Start the backend to load framework details." />
+      </div>
+    );
+  }
+
   if (error && !framework) {
     return (
       <div className="space-y-4">
@@ -220,7 +232,7 @@ export default function FrameworkDetail() {
         <div className="flex-1" />
         <button
           onClick={handleRefresh}
-          disabled={refreshing}
+          disabled={refreshing || backendDown}
           className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />

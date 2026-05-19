@@ -7,6 +7,8 @@ import { Key, Trash2, Loader2, Eye, EyeOff, Check, ShieldCheck, ShieldAlert, Pen
 import { fetchKeys, setKey, deleteKey } from "../lib/api";
 import type { KeyEntry } from "../lib/types";
 import { KEYS_CHANGED_EVENT } from "../lib/events";
+import { useData } from "../lib/DataContext";
+import BackendStoppedState from "./BackendStoppedState";
 
 const KNOWN_PROVIDERS = ["openrouter", "anthropic", "openai", "deepseek"];
 
@@ -18,6 +20,7 @@ interface Props {
 }
 
 export default function ApiKeysSection({ onChanged, compact }: Props) {
+  const { backendDown } = useData();
   const [keys, setKeys] = useState<KeyEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [newProvider, setNewProvider] = useState("");
@@ -30,6 +33,11 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadKeys = async () => {
+    if (backendDown) {
+      setLoading(false);
+      setLoadError(null);
+      return;
+    }
     try {
       setLoading(true);
       setLoadError(null);
@@ -52,7 +60,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
     onChanged?.();
   };
 
-  useEffect(() => { loadKeys(); }, []);
+  useEffect(() => { loadKeys(); }, [backendDown]);
 
   useEffect(() => {
     if (!successMsg) return;
@@ -61,6 +69,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
   }, [successMsg]);
 
   const handleAdd = async () => {
+    if (backendDown) return;
     if (saving) return;
     if (!newProvider || !newKey) return;
     try {
@@ -80,6 +89,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
 
   const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
   const handleDelete = async (provider: string) => {
+    if (backendDown) return;
     if (deletingProvider) return;
     if (!window.confirm(`Remove the ${provider} API key? This may disable the commander or framework features that depend on it.`)) return;
     try {
@@ -100,6 +110,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
   const [editSaving, setEditSaving] = useState(false);
 
   const handleUpdate = async (provider: string) => {
+    if (backendDown) return;
     if (!editKey || editSaving) return;
     try {
       setEditSaving(true);
@@ -144,7 +155,11 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
         </div>
       )}
 
-      {(error || loadError) && (
+      {backendDown && keys.length === 0 && (
+        <BackendStoppedState message="Start the backend to manage API keys." />
+      )}
+
+      {!backendDown && (error || loadError) && (
         <div className="text-[10px] text-red bg-red/5 border border-red/20 rounded px-2 py-1">
           {error || loadError}
         </div>
@@ -155,7 +170,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
         </div>
       )}
 
-      {loading ? (
+      {loading && !backendDown ? (
         <div className="flex items-center gap-2 text-[10px] text-text-muted py-2">
           <Loader2 className="h-3 w-3 animate-spin" /> loading keys...
         </div>
@@ -174,11 +189,13 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => {
+                          if (backendDown) return;
                           setEditingProvider(editingProvider === entry.provider ? null : entry.provider);
                           setEditKey("");
                           setShowEditKey(false);
                         }}
-                        className="p-1 rounded text-text-muted hover:text-accent hover:bg-accent/5 transition-colors"
+                        disabled={backendDown}
+                        className="p-1 rounded text-text-muted hover:text-accent hover:bg-accent/5 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                         title="update key"
                         aria-label={`Update ${entry.provider} key`}
                       >
@@ -186,7 +203,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
                       </button>
                       <button
                         onClick={() => handleDelete(entry.provider)}
-                        disabled={deletingProvider === entry.provider}
+                        disabled={backendDown || deletingProvider === entry.provider}
                         className="p-1 rounded text-text-muted hover:text-red hover:bg-red/5 transition-colors disabled:opacity-30"
                         title="remove key"
                         aria-label={`Remove ${entry.provider} key`}
@@ -205,23 +222,25 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
                           onKeyDown={(e) => { if (e.key === "Enter") handleUpdate(entry.provider); }}
                           placeholder="new key..."
                           aria-label={`New key for ${entry.provider}`}
+                          disabled={backendDown}
                           autoComplete="one-time-code"
                           data-1p-ignore
                           data-lpignore="true"
-                          className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
+                          className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <button
                           type="button"
                           onClick={() => setShowEditKey(!showEditKey)}
+                          disabled={backendDown}
                           aria-label={showEditKey ? "hide key" : "show key"}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           {showEditKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                         </button>
                       </div>
                       <button
                         onClick={() => handleUpdate(entry.provider)}
-                        disabled={!editKey || editSaving}
+                        disabled={backendDown || !editKey || editSaving}
                         className="rounded border border-accent bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-30 transition-colors flex items-center gap-1"
                       >
                         {editSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
@@ -234,14 +253,14 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
             </div>
           )}
 
-          {keys.length === 0 && (
+          {!backendDown && keys.length === 0 && (
             <div className="text-[10px] text-text-muted py-1 flex items-center gap-1.5">
               <ShieldAlert className="h-3 w-3" />
               no api keys configured — agents will rely on environment variables
             </div>
           )}
 
-          {availableProviders.length > 0 && (
+          {!backendDown && availableProviders.length > 0 && (
             <div className="space-y-1.5 pt-1">
               <div className="text-[10px] text-text-muted">
                 {keys.length > 0 ? "add another provider" : "add a provider"}

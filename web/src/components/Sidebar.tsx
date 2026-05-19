@@ -50,7 +50,7 @@ function parseProjectRoute(pathname: string) {
 }
 
 export default function Sidebar() {
-  const { agents, projects, instances, pendingActions } = useData();
+  const { agents, projects, instances, pendingActions, backendDown, backendPollingPaused } = useData();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
@@ -72,6 +72,7 @@ export default function Sidebar() {
     [frameworksById],
   );
   useEffect(() => {
+    if (backendDown || backendPollingPaused) return;
     let cancelled = false;
     const load = (refresh = false) => {
       fetchFrameworks(refresh)
@@ -93,7 +94,7 @@ export default function Sidebar() {
       window.removeEventListener("eyrie:frameworks-changed", handleFrameworksChanged);
       clearInterval(id);
     };
-  }, []);
+  }, [backendDown, backendPollingPaused]);
 
   // Create a 1x1 transparent image for drag operations to prevent
   // Chrome's split-view suggestion that appears when dragging <a> tags

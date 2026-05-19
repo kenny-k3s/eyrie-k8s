@@ -33,6 +33,7 @@ import {
 import { StreamingIndicator } from "./chat/StreamingIndicator";
 import type { StreamingPart } from "./chat/StreamingIndicator";
 import { useAutoScroll } from "../lib/useAutoScroll";
+import { useData } from "../lib/DataContext";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -89,6 +90,19 @@ function groupSessions(sessions: Session[]): SessionGroup[] {
   );
 }
 
+function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
+  return a.role === b.role && a.content === b.content;
+}
+
+function reconcilePendingMessages(
+  pending: ChatMessage[],
+  fetched: ChatMessage[],
+): ChatMessage[] {
+  return pending.filter(
+    (pendingMsg) => !fetched.some((msg) => sameMessage(msg, pendingMsg)),
+  );
+}
+
 // ── ChatPanel ───────────────────────────────────────────────────────────
 
 export interface ChatPanelProps {
@@ -118,6 +132,7 @@ export function ChatPanel({
   disabled = false,
   heightOffset = 240,
 }: ChatPanelProps) {
+  const { backendDown } = useData();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -158,6 +173,10 @@ export function ChatPanel({
   // ── Load sessions ───────────────────────────────────────────────────
 
   useEffect(() => {
+    if (backendDown) {
+      setLoading(false);
+      return;
+    }
     fetchSessions(agentName)
       .then((resp) => {
         const all = resp.sessions ?? [];
@@ -179,14 +198,17 @@ export function ChatPanel({
           requestedSession || sessionDisplayName(defaultSessionKey),
         );
       });
-  }, [agentName, alive, defaultSessionKey, requestedSession]);
+  }, [agentName, alive, defaultSessionKey, requestedSession, backendDown]);
 
   // ── Load group messages ─────────────────────────────────────────────
 
   const prevGroupRef = useRef<string>("");
   const loadGroup = useCallback(
     (group: SessionGroup | undefined) => {
-      if (!group) return;
+      if (!group || backendDown) {
+        setLoading(false);
+        return;
+      }
       const isSwitch =
         prevGroupRef.current !== "" && prevGroupRef.current !== group.name;
       prevGroupRef.current = group.name;
@@ -222,27 +244,32 @@ export function ChatPanel({
         setLoading(false);
       });
     },
-    [agentName],
+    [agentName, backendDown],
   );
 
   const refreshCurrentSession = useCallback(
     (key: string) => {
-      if (!key) return;
-      fetchChatMessages(agentName, key, 100)
+      if (!key || backendDown) return Promise.resolve();
+      return fetchChatMessages(agentName, key, 100)
         .then((msgs) => {
           setSessionMsgs((prev) => {
             const next = new Map(prev);
             next.set(key, msgs);
             return next;
           });
-          if (msgs.length > 0) {
-            setPendingMsgs([]);
-          }
+          setPendingMsgs((prev) => reconcilePendingMessages(prev, msgs));
         })
         .catch(() => {});
     },
-    [agentName],
+    [agentName, backendDown],
   );
+
+  const refreshSessions = useCallback(() => {
+    if (backendDown) return;
+    fetchSessions(agentName)
+      .then((resp) => setSessions(resp.sessions ?? []))
+      .catch(() => {});
+  }, [agentName, backendDown]);
 
   useEffect(() => {
     const group = groups.find((g) => g.name === activeGroupName);
@@ -256,12 +283,12 @@ export function ChatPanel({
   // ── Poll for new messages ───────────────────────────────────────────
 
   useEffect(() => {
-    if (!currentSessionKey || !alive || sending) return;
+    if (!currentSessionKey || !alive || sending || backendDown) return;
     const interval = setInterval(() => {
       refreshCurrentSession(currentSessionKey);
     }, 5000);
     return () => clearInterval(interval);
-  }, [currentSessionKey, alive, sending, refreshCurrentSession]);
+  }, [currentSessionKey, alive, sending, refreshCurrentSession, backendDown]);
 
   // ── Build flat items ────────────────────────────────────────────────
 
@@ -269,9 +296,9 @@ export function ChatPanel({
     /^(\[\[no_reply\]\]|NO_REPLY)$/i.test(content.trim());
 
   const flatItems: FlatItem[] = [];
-  if (activeGroup) {
+  if (activeGroup || pendingMsgs.length > 0) {
     let flatIdx = 0;
-    const sortedArchived = [...activeGroup.archived].sort((a, b) => {
+    const sortedArchived = [...(activeGroup?.archived ?? [])].sort((a, b) => {
       const ta = a.last_message ? new Date(a.last_message).getTime() : 0;
       const tb = b.last_message ? new Date(b.last_message).getTime() : 0;
       return ta - tb;
@@ -292,7 +319,7 @@ export function ChatPanel({
     }
 
     let firstMsgHandled = false;
-    if (activeGroup.current) {
+    if (activeGroup?.current) {
       if (sortedArchived.length > 0) {
         flatItems.push({
           kind: "spacer",
@@ -358,6 +385,15 @@ export function ChatPanel({
   const totalMsgCount = flatItems.filter(
     (it) => it.kind === "message",
   ).length;
+  const lastMessageKey = (() => {
+    for (let i = flatItems.length - 1; i >= 0; i--) {
+      const item = flatItems[i];
+      if (item.kind !== "message") continue;
+      const { msg } = item;
+      return `${msg.role}:${msg.timestamp}:${msg.content.length}`;
+    }
+    return "";
+  })();
 
   // WHY localStorage for pending reply: React state (sending) is lost on
   // reload, but the agent may still be processing. We persist a pending flag
@@ -407,7 +443,14 @@ export function ChatPanel({
   }, [pendingKey, lastCurrentMsg, totalMsgCount]);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────
-  const scrollRef = useAutoScroll([totalMsgCount, sending, waitingForReply, streamingContent, toolCalls]);
+  const { ref: scrollRef, scrollToBottom } = useAutoScroll([
+    totalMsgCount,
+    lastMessageKey,
+    sending,
+    waitingForReply,
+    streamingContent,
+    toolCalls,
+  ]);
 
   // WHY: Track briefing by a composite key (agent + timestamp) rather than
   // a simple boolean. A boolean ref gets reset by React Strict Mode's
@@ -466,6 +509,7 @@ export function ChatPanel({
           setToolCalls([]);
           setSending(false);
           setPendingReply(false);
+          scrollToBottom();
           onDone();
           break;
         }
@@ -478,7 +522,7 @@ export function ChatPanel({
           break;
       }
     },
-    [agentName, setPendingReply],
+    [agentName, scrollToBottom, setPendingReply],
   );
 
 
@@ -493,7 +537,7 @@ export function ChatPanel({
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || sending || backendDown) return;
 
     setInput("");
     setChatError(null);
@@ -520,12 +564,25 @@ export function ChatPanel({
           // On done: refresh current session and focus input
           inputRef.current?.focus();
           if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
-          refreshTimeoutRef.current = setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
+          refreshTimeoutRef.current = setTimeout(() => {
+            const refresh = refreshCurrentSession(currentSessionKey);
+            refreshSessions();
+            refresh.finally(scrollToBottom);
+          }, 500);
         });
       },
     );
     abortRef.current = controller;
-  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession, handleChatEvent, setPendingReply]);
+  }, [input, sending, backendDown, agentName, currentSessionKey, refreshCurrentSession, refreshSessions, handleChatEvent, scrollToBottom, setPendingReply]);
+
+  useEffect(() => {
+    if (!backendDown) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    setSending(false);
+    setPendingReply(false);
+  }, [backendDown, setPendingReply]);
 
   useEffect(() => {
     return () => {
@@ -535,12 +592,6 @@ export function ChatPanel({
   }, []);
 
   // ── Session management ──────────────────────────────────────────────
-
-  const refreshSessions = useCallback(() => {
-    fetchSessions(agentName)
-      .then((resp) => setSessions(resp.sessions ?? []))
-      .catch(() => {});
-  }, [agentName]);
 
   const handleResetSession = useCallback(
     async (key: string) => {
@@ -692,6 +743,7 @@ export function ChatPanel({
       <div
         ref={scrollRef}
         className={`flex-1 overflow-y-auto border-x border-border bg-surface text-xs ${groups.length === 0 ? "rounded-t border-t" : ""}`}
+        style={{ overflowAnchor: "none" }}
       >
         {longMsgItems.length > 0 && (
           <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">
@@ -858,14 +910,14 @@ export function ChatPanel({
           }}
           placeholder={
             placeholder ??
-            (alive ? "Type a message..." : "Agent is not running")
+            (backendDown ? "Backend is stopped" : alive ? "Type a message..." : "Agent is not running")
           }
-          disabled={sending || disabled || !alive}
+          disabled={sending || disabled || !alive || backendDown}
           className="flex-1 bg-transparent text-xs text-text placeholder:text-text-muted focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={handleSend}
-          disabled={sending || disabled || !alive || !input.trim()}
+          disabled={sending || disabled || !alive || backendDown || !input.trim()}
           className="rounded border border-border px-3 py-1 text-[10px] font-medium text-text-secondary transition-colors hover:bg-surface hover:text-text disabled:opacity-30"
         >
           send
