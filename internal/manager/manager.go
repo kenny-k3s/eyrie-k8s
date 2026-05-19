@@ -40,6 +40,10 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 		// Embedded agents run in-process as goroutines — lifecycle is managed
 		// by the adapter, not by external CLI commands. This is a no-op.
 		return nil
+	case "codex":
+		// Codex App Server is launched per turn by the adapter; there is no
+		// persistent framework daemon for the manager to start.
+		return nil
 	default:
 		return fmt.Errorf("unknown framework %q: cannot determine lifecycle command", framework)
 	}
@@ -392,6 +396,8 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 		}
 	case "embedded":
 		return nil
+	case "codex":
+		return nil
 	default:
 		return fmt.Errorf("unknown framework %q", framework)
 	}
@@ -472,6 +478,8 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		// Embedded agents have no external process — lifecycle is managed
 		// by the adapter's Start/Stop/Restart methods directly.
 		return nil
+	case "codex":
+		return nil
 	default:
 		return fmt.Errorf("unknown framework %q", framework)
 	}
@@ -491,6 +499,8 @@ func CommandString(framework string, action LifecycleAction) string {
 		return fmt.Sprintf("adapter.%s() (PID-based)", strings.Title(string(action)))
 	case "picoclaw":
 		return "picoclaw gateway " + string(action)
+	case "codex":
+		return "codex app-server (launched per turn)"
 	default:
 		return fmt.Sprintf("<unknown framework %q> %s", framework, action)
 	}

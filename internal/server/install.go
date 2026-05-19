@@ -23,27 +23,27 @@ import (
 
 // installState tracks ongoing installations
 type installState struct {
-	mu          sync.RWMutex
-	current     map[string]*installProgress
-	stateFile   string
+	mu        sync.RWMutex
+	current   map[string]*installProgress
+	stateFile string
 }
 
 type installProgress struct {
-	FrameworkID string    `json:"framework_id"`
-	Phase       string    `json:"phase"`
-	Status      string    `json:"status"` // "running", "success", "error", "stale"
-	Progress    int       `json:"progress"` // 0-100
-	Message     string    `json:"message"`
-	Error       string    `json:"error,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
+	FrameworkID string     `json:"framework_id"`
+	Phase       string     `json:"phase"`
+	Status      string     `json:"status"`   // "running", "success", "error", "stale"
+	Progress    int        `json:"progress"` // 0-100
+	Message     string     `json:"message"`
+	Error       string     `json:"error,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	PID         int       `json:"pid,omitempty"` // Process ID of install command
+	PID         int        `json:"pid,omitempty"` // Process ID of install command
 	// Operation distinguishes install from uninstall without substring-matching
 	// Message. The frontend uses this for reliable state classification.
-	Operation   string    `json:"operation,omitempty"` // "install" or "uninstall"
+	Operation string `json:"operation,omitempty"` // "install" or "uninstall"
 
 	// Log buffer for streaming
-	logBuf []string `json:"-"` // Store logs for clients that connect later
+	logBuf []string   `json:"-"` // Store logs for clients that connect later
 	logMu  sync.Mutex `json:"-"`
 }
 
@@ -163,10 +163,10 @@ func isProcessAlive(pid int) bool {
 
 type frameworkWithStatus struct {
 	registry.Framework
-	Installed     bool   `json:"installed"`                    // binary exists on disk
-	Configured    bool   `json:"configured"`                   // config file exists (onboarding complete)
-	Version       string `json:"version,omitempty"`             // installed binary version (best-effort)
-	VersionStatus string `json:"version_status,omitempty"`      // "outdated", "update_available", "current"
+	Installed     bool   `json:"installed"`                // binary exists on disk
+	Configured    bool   `json:"configured"`               // config file exists (onboarding complete)
+	Version       string `json:"version,omitempty"`        // installed binary version (best-effort)
+	VersionStatus string `json:"version_status,omitempty"` // "outdated", "update_available", "current"
 }
 
 // handleListFrameworks returns all frameworks from the registry with installation status
@@ -230,7 +230,13 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 // isReady, etc.) — so do NOT collapse "configured" into "installed" here.
 func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
-	if _, err := os.Stat(binaryPath); err == nil {
+	if strings.ContainsAny(binaryPath, `/\`) {
+		if _, err := os.Stat(binaryPath); err == nil {
+			installed = true
+		}
+	} else if config.LookPathEnriched(binaryPath) != binaryPath {
+		installed = true
+	} else if _, err := exec.LookPath(binaryPath); err == nil {
 		installed = true
 	}
 	configPath := config.ExpandHome(fw.ConfigPath)
@@ -245,6 +251,9 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 // or the command fails. Bounded to 3s to avoid hanging on unresponsive binaries.
 func frameworkVersion(fw registry.Framework) string {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
+	if !strings.ContainsAny(binaryPath, `/\`) {
+		binaryPath = config.LookPathEnriched(binaryPath)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
@@ -336,9 +345,9 @@ func (s *Server) runInstallation(fw *registry.Framework, copyFrom string) {
 
 	// Run installation phases
 	phases := []struct {
-		name       string
+		name        string
 		progressPct int
-		fn         func() error
+		fn          func() error
 	}{
 		{"binary", 25, func() error { return installBinary(ctx, fw, progress) }},
 		{"config", 50, func() error { return scaffoldConfig(ctx, fw, copyFrom, progress) }},
@@ -507,8 +516,12 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 		progress.addLog("After installing, restart Eyrie to detect the framework.")
 		// Check if the binary actually exists after user might have installed it
 		binaryPath := config.ExpandHome(fw.BinaryPath)
-		if _, err := os.Stat(binaryPath); err != nil {
-			return fmt.Errorf("binary not found at %s — install manually and retry", binaryPath)
+		if strings.ContainsAny(binaryPath, `/\`) {
+			if _, err := os.Stat(binaryPath); err != nil {
+				return fmt.Errorf("binary not found at %s — install manually and retry", binaryPath)
+			}
+		} else if config.LookPathEnriched(binaryPath) == binaryPath {
+			return fmt.Errorf("binary %q not found on PATH — install manually and retry", binaryPath)
 		}
 		progress.addLog(fmt.Sprintf("Found binary at %s", binaryPath))
 		return nil
@@ -592,6 +605,19 @@ func scaffoldConfig(ctx context.Context, fw *registry.Framework, copyFrom string
 		progress.addLog(fmt.Sprintf("Copying config from %s (not yet implemented)", copyFrom))
 		// TODO: Implement config copying (needs discovery context)
 		return fmt.Errorf("config copying not yet implemented")
+	}
+
+	if data, ok, err := fw.DefaultConfigDocument(); err != nil {
+		return fmt.Errorf("building default config: %w", err)
+	} else if ok {
+		if err := os.MkdirAll(filepath.Dir(expandedPath), 0o755); err != nil {
+			return fmt.Errorf("creating config directory: %w", err)
+		}
+		if err := os.WriteFile(expandedPath, append(data, '\n'), 0o600); err != nil {
+			return fmt.Errorf("writing default config: %w", err)
+		}
+		progress.addLog(fmt.Sprintf("Created default config at %s", fw.ConfigPath))
+		return nil
 	}
 
 	progress.addLog("Using default config from framework installer")
@@ -800,18 +826,18 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 			for _, inst := range instances {
 				if inst.Framework == fw.ID {
 					orphans = append(orphans, map[string]string{
-						"id":        inst.ID,
-						"name":      inst.DisplayName,
-						"role":      string(inst.HierarchyRole),
+						"id":         inst.ID,
+						"name":       inst.DisplayName,
+						"role":       string(inst.HierarchyRole),
 						"project_id": inst.ProjectID,
 					})
 				}
 			}
 			if len(orphans) > 0 {
 				sse.WriteEvent(map[string]any{
-					"type":     "orphaned_instances",
+					"type":      "orphaned_instances",
 					"instances": orphans,
-					"message":  fmt.Sprintf("%d agent(s) used %s and can no longer start", len(orphans), fw.Name),
+					"message":   fmt.Sprintf("%d agent(s) used %s and can no longer start", len(orphans), fw.Name),
 				})
 			}
 		}
@@ -1054,11 +1080,9 @@ func (s *Server) handleFrameworkHealthProxy(w http.ResponseWriter, r *http.Reque
 func setupAdapter(fw *registry.Framework, progress *installProgress) error {
 	progress.addLog(fmt.Sprintf("Setting up %s adapter", fw.AdapterType))
 
-	switch fw.AdapterType {
-	case "http", "websocket", "cli", "hybrid":
-		progress.addLog(fmt.Sprintf("Using %s adapter", fw.AdapterType))
-		return nil
-	default:
+	if !registry.IsSupportedAdapterType(fw.AdapterType) {
 		return fmt.Errorf("unsupported adapter type: %s", fw.AdapterType)
 	}
+	progress.addLog(fmt.Sprintf("Using %s adapter", fw.AdapterType))
+	return nil
 }

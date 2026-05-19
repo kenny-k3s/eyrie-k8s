@@ -67,7 +67,7 @@ Content-Type: application/json
 
 Body:
 - name (string, required): slug like "researcher-riley"
-- framework (string, required): "zeroclaw", "openclaw", "hermes", "picoclaw", or "embedded"
+- framework (string, required): "zeroclaw", "openclaw", "hermes", "picoclaw", "embedded", or "codex"
 - persona_id (string): ID of a persona from the registry
 - hierarchy_role (string): "commander", "captain", or "talon"
 - project_id (string): assign to a project on creation

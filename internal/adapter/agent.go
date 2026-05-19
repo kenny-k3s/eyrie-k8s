@@ -68,6 +68,7 @@ const (
 	FrameworkHermes   = "hermes"
 	FrameworkPicoClaw = "picoclaw"
 	FrameworkEmbedded = "embedded"
+	FrameworkCodex    = "codex"
 )
 
 // Agent is the common interface that every Claw framework adapter implements.
@@ -134,10 +135,10 @@ type AgentCapabilities struct {
 }
 
 type ComponentHealth struct {
-	Status      string     `json:"status"`
-	LastOK      *time.Time `json:"last_ok,omitempty"`
-	LastError   string     `json:"last_error,omitempty"`
-	RestartCount int       `json:"restart_count"`
+	Status       string     `json:"status"`
+	LastOK       *time.Time `json:"last_ok,omitempty"`
+	LastError    string     `json:"last_error,omitempty"`
+	RestartCount int        `json:"restart_count"`
 }
 
 type HealthStatus struct {
@@ -150,16 +151,16 @@ type HealthStatus struct {
 }
 
 type AgentStatus struct {
-	Provider       string   `json:"provider"`
-	Model          string   `json:"model"`
-	Channels       []string `json:"channels"`
-	Skills         int      `json:"skills"`
+	Provider       string     `json:"provider"`
+	Model          string     `json:"model"`
+	Channels       []string   `json:"channels"`
+	Skills         int        `json:"skills"`
 	LastTask       *time.Time `json:"last_task,omitempty"`
-	Errors24h      int      `json:"errors_24h"`
-	GatewayPort    int      `json:"gateway_port"`
-	ProviderStatus string   `json:"provider_status,omitempty"` // "ok", "error", or "" (unknown/not checked)
-	BusyState      string   `json:"busy_state,omitempty"`      // "idle", "busy", "error"
-	CurrentTask    string   `json:"current_task,omitempty"`     // description of current activity
+	Errors24h      int        `json:"errors_24h"`
+	GatewayPort    int        `json:"gateway_port"`
+	ProviderStatus string     `json:"provider_status,omitempty"` // "ok", "error", or "" (unknown/not checked)
+	BusyState      string     `json:"busy_state,omitempty"`      // "idle", "busy", "error"
+	CurrentTask    string     `json:"current_task,omitempty"`    // description of current activity
 }
 
 // InferBusyState populates BusyState based on LastTask timestamp.
@@ -272,16 +273,16 @@ type AgentConfig struct {
 }
 
 type LogEntry struct {
-	Timestamp time.Time `json:"timestamp"`
-	Level     string    `json:"level"`
-	Message   string    `json:"message"`
+	Timestamp time.Time      `json:"timestamp"`
+	Level     string         `json:"level"`
+	Message   string         `json:"message"`
 	Fields    map[string]any `json:"fields,omitempty"`
 }
 
 type Personality struct {
-	Name        string            `json:"name"`
-	SystemPrompt string           `json:"system_prompt,omitempty"`
-	Traits      map[string]string `json:"traits,omitempty"`
+	Name         string            `json:"name"`
+	SystemPrompt string            `json:"system_prompt,omitempty"`
+	Traits       map[string]string `json:"traits,omitempty"`
 	// Raw workspace identity files (IDENTITY.md, SOUL.md, etc.)
 	IdentityFiles map[string]string `json:"identity_files,omitempty"`
 }
@@ -306,15 +307,15 @@ type Session struct {
 // and multi-agent project conversations. Fields like ID, Sender, and Mention
 // are only populated in project chat contexts; 1:1 chat leaves them empty.
 type ChatMessage struct {
-	ID        string         `json:"id,omitempty"`
-	Sender    string         `json:"sender,omitempty"`    // agent name or "user" (project chat)
-	Role      string         `json:"role"`                // "user", "assistant", "commander", "captain", "talon", "system"
-	Content   string         `json:"content"`
-	Timestamp time.Time      `json:"timestamp"`
-	Channel   string         `json:"channel,omitempty"`
-	Mention   string         `json:"mention,omitempty"`   // "@captain", "@commander", etc. (project chat)
-	Parts     []ChatPart     `json:"parts,omitempty"`
-	Detail    string         `json:"detail,omitempty"`    // expandable content (e.g., full briefing text)
+	ID        string     `json:"id,omitempty"`
+	Sender    string     `json:"sender,omitempty"` // agent name or "user" (project chat)
+	Role      string     `json:"role"`             // "user", "assistant", "commander", "captain", "talon", "system"
+	Content   string     `json:"content"`
+	Timestamp time.Time  `json:"timestamp"`
+	Channel   string     `json:"channel,omitempty"`
+	Mention   string     `json:"mention,omitempty"` // "@captain", "@commander", etc. (project chat)
+	Parts     []ChatPart `json:"parts,omitempty"`
+	Detail    string     `json:"detail,omitempty"` // expandable content (e.g., full briefing text)
 }
 
 // ChatPart is an ordered content element within a message.

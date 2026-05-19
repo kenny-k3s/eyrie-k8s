@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,6 +31,12 @@ func probeHealth(ctx context.Context, framework, host string, port int) bool {
 		// the adapter's running flag, checked via probeEmbeddedByName().
 		// The caller passes the agent name for embedded lookups.
 		return probeEmbeddedByName(host)
+	case adapter.FrameworkCodex:
+		if config.LookPathEnriched("codex") != "codex" {
+			return true
+		}
+		_, err := exec.LookPath("codex")
+		return err == nil
 	default:
 		return probeHTTP(probeCtx, host, port)
 	}

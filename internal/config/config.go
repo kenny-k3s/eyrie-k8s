@@ -49,7 +49,7 @@ func DefaultConfig() Config {
 		Dashboard: DashboardConfig{
 			Port:        7200,
 			Host:        "127.0.0.1",
-			OpenBrowser: true,
+			OpenBrowser: false,
 		},
 		Discovery: DiscoveryConfig{
 			IntervalSeconds: 30,

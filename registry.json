@@ -372,6 +372,120 @@
         ],
         "api_key_hint": "store API keys in ~/.picoclaw/.security.yml (chmod 600) or set PICOCLAW_CHANNELS_* environment variables"
       }
+    },
+    {
+      "id": "codex",
+      "name": "Codex App Server",
+      "description": "OpenAI Codex harness runtime hosted under Eyrie agent identity",
+      "language": "rust",
+      "repository": "https://github.com/openai/codex",
+      "website": "https://developers.openai.com/codex/app-server",
+      "install_method": "manual",
+      "install_cmd": "Install the OpenAI Codex CLI, then ensure `codex` is available on PATH",
+      "requirements": ["codex-cli"],
+      "config_format": "json",
+      "config_path": "~/.codex-eyrie/config.json",
+      "config_dir": "~/.codex-eyrie",
+      "binary_path": "codex",
+      "adapter_type": "app-server",
+      "default_port": 0,
+      "start_cmd": "codex app-server",
+      "stop_cmd": "",
+      "status_cmd": "codex --version",
+      "restart_cmd": "",
+      "health_url": "",
+      "log_dir": "~/.codex-eyrie/logs",
+      "log_format": "jsonl",
+      "config_schema": {
+        "common_fields": [
+          {
+            "key": "binary_path",
+            "label": "codex binary",
+            "type": "text",
+            "default": "codex",
+            "required": true,
+            "description": "Codex CLI binary used to launch app-server",
+            "advanced": true
+          },
+          {
+            "key": "cwd",
+            "label": "workspace",
+            "type": "text",
+            "default": "~/.codex-eyrie/workspace",
+            "required": true,
+            "description": "working directory Codex should operate inside",
+            "advanced": true
+          },
+          {
+            "key": "codex_home",
+            "label": "Codex home",
+            "type": "text",
+            "default": "~/.codex-eyrie/codex-home",
+            "required": false,
+            "description": "Eyrie-managed CODEX_HOME for this agent runtime",
+            "advanced": true
+          },
+          {
+            "key": "instructions_path",
+            "label": "instructions path",
+            "type": "text",
+            "default": "~/.codex-eyrie/workspace/AGENTS.md",
+            "required": false,
+            "description": "Codex-readable AGENTS.md instruction bundle for this Eyrie agent",
+            "advanced": true
+          },
+          {
+            "key": "model",
+            "label": "model",
+            "type": "text",
+            "default": "gpt-5.4",
+            "required": true,
+            "description": "Codex model for turns",
+            "group": "llm",
+            "suggestions": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
+          },
+          {
+            "key": "effort",
+            "label": "reasoning effort",
+            "type": "select",
+            "options": ["low", "medium", "high", "xhigh"],
+            "default": "medium",
+            "required": true,
+            "description": "reasoning effort for Codex turns",
+            "group": "llm"
+          },
+          {
+            "key": "approval_policy",
+            "label": "approval policy",
+            "type": "select",
+            "options": ["untrusted", "on-request", "on-failure", "never"],
+            "default": "untrusted",
+            "required": true,
+            "description": "Codex approval policy; Eyrie still declines runtime approval requests in the first slice",
+            "advanced": true
+          },
+          {
+            "key": "sandbox",
+            "label": "sandbox",
+            "type": "select",
+            "options": ["readOnly", "workspaceWrite"],
+            "default": "workspaceWrite",
+            "required": true,
+            "description": "sandbox policy passed to Codex turns",
+            "advanced": true
+          },
+          {
+            "key": "network_access",
+            "label": "network access",
+            "type": "checkbox",
+            "default": false,
+            "required": false,
+            "description": "allow network access for workspace-write Codex turns",
+            "advanced": true
+          }
+        ],
+        "api_key_hint": "Codex uses your existing Codex CLI authentication; run `codex login` outside Eyrie if needed"
+      }
     }
   ]
 }

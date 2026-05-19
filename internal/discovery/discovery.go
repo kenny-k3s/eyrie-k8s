@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -76,7 +77,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		// For embedded agents, pass the agent name so the probe can look up
 		// the cached adapter singleton. For all others, pass the host.
 		probeHost := agent.Host
-		if agent.Framework == adapter.FrameworkEmbedded {
+		if agent.Framework == adapter.FrameworkEmbedded || agent.Framework == adapter.FrameworkCodex {
 			probeHost = agent.Name
 		}
 		alive := probeHealth(ctx, agent.Framework, probeHost, agent.Port)
@@ -149,15 +150,15 @@ func scanInstances() []adapter.DiscoveredAgent {
 			continue
 		}
 
-		// Embedded agents don't have config files that need scanning —
+		// Embedded and Codex agents don't expose a framework gateway to scan —
 		// they are discovered directly from the instance metadata.
-		if inst.Framework == adapter.FrameworkEmbedded {
+		if inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex {
 			agents = append(agents, adapter.DiscoveredAgent{
 				Name:        inst.Name,
 				DisplayName: inst.DisplayName,
-				Framework:   adapter.FrameworkEmbedded,
+				Framework:   inst.Framework,
 				Host:        "127.0.0.1",
-				Port:        0, // No gateway port — runs in-process
+				Port:        0, // No gateway port
 				ConfigPath:  inst.ConfigPath,
 				InstanceID:  inst.ID,
 			})
@@ -317,6 +318,12 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 		embeddedAdapters[d.Name] = a
 		embeddedAdaptersMu.Unlock()
 		return a
+	case adapter.FrameworkCodex:
+		workspacePath := ""
+		if d.ConfigPath != "" {
+			workspacePath = filepath.Join(filepath.Dir(d.ConfigPath), "workspace")
+		}
+		return adapter.NewCodexAdapter(d.Name, d.Name, d.ConfigPath, workspacePath)
 	default:
 		return adapter.NewZeroClawAdapter(
 			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,
@@ -339,14 +346,16 @@ func frameworkBinaryExists(framework string) bool {
 		binaryName = "hermes"
 	case adapter.FrameworkEmbedded:
 		return true // in-process, no binary needed
+	case adapter.FrameworkCodex:
+		binaryName = "codex"
 	default:
 		return true // unknown framework — don't filter
 	}
 	resolved := config.LookPathEnriched(binaryName)
-	// LookPathEnriched returns the bare name if not found; check for absolute path
-	if !filepath.IsAbs(resolved) {
-		return false
+	if filepath.IsAbs(resolved) {
+		_, err := os.Stat(resolved)
+		return err == nil
 	}
-	_, err := os.Stat(resolved)
+	_, err := exec.LookPath(binaryName)
 	return err == nil
 }

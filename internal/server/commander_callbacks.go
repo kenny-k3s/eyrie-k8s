@@ -96,12 +96,12 @@ func (s *Server) restartAgentByName(ctx context.Context, name string) error {
 		return fmt.Errorf("agent %q not found", name)
 	}
 
-	// Embedded agents don't have a separate process — their "restart"
-	// goes through the adapter directly.
-	if target.Framework == adapter.FrameworkEmbedded {
+	// Embedded and Codex agents don't have a separate process — their
+	// "restart" goes through the adapter directly.
+	if target.Framework == adapter.FrameworkEmbedded || target.Framework == adapter.FrameworkCodex {
 		agent, err := s.findAgentAnyState(restartCtx, name)
 		if err != nil {
-			return fmt.Errorf("resolving embedded agent: %w", err)
+			return fmt.Errorf("resolving %s agent: %w", target.Framework, err)
 		}
 		if restartErr := agent.Restart(restartCtx); restartErr != nil {
 			// Mirror the framework-level error-status persistence so both
@@ -111,9 +111,9 @@ func (s *Server) restartAgentByName(ctx context.Context, name string) error {
 					slog.Warn("failed to persist embedded restart error status", "instance", target.InstanceID, "error", updateErr)
 				}
 			}
-			return fmt.Errorf("restarting embedded agent: %w", restartErr)
+			return fmt.Errorf("restarting %s agent: %w", target.Framework, restartErr)
 		}
-		// Persist running status on success (Restart is synchronous for embedded agents)
+		// Persist running status on success (Restart is synchronous here).
 		if target.InstanceID != "" {
 			if updateErr := s.instanceStore.UpdateStatus(target.InstanceID, instance.StatusRunning); updateErr != nil {
 				slog.Warn("failed to persist embedded restart success status", "instance", target.InstanceID, "error", updateErr)

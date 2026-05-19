@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -253,6 +254,18 @@ func scaffoldConfig(ctx context.Context, fw *registry.Framework) error {
 
 	// Otherwise, config should have been created by the installer
 	if _, err := os.Stat(expandedPath); os.IsNotExist(err) {
+		if data, ok, err := fw.DefaultConfigDocument(); err != nil {
+			return fmt.Errorf("building default config: %w", err)
+		} else if ok {
+			if err := os.MkdirAll(filepath.Dir(expandedPath), 0o755); err != nil {
+				return fmt.Errorf("creating config directory: %w", err)
+			}
+			if err := os.WriteFile(expandedPath, append(data, '\n'), 0o600); err != nil {
+				return fmt.Errorf("writing default config: %w", err)
+			}
+			fmt.Printf("Created default config at %s\n", fw.ConfigPath)
+			return nil
+		}
 		fmt.Printf("⚠️  Config not found at %s\n", fw.ConfigPath)
 		fmt.Printf("The framework installer may not have created a default config.\n")
 		fmt.Printf("Please create one manually or run the framework's setup command.\n")
@@ -373,7 +386,10 @@ func setupAdapter(fw *registry.Framework) error {
 		fmt.Printf("Using hybrid adapter (HTTP + CLI)\n")
 		return nil
 
-	default:
-		return fmt.Errorf("unsupported adapter type: %s", fw.AdapterType)
+	case "app-server":
+		fmt.Printf("Using App Server adapter\n")
+		return nil
 	}
+
+	return fmt.Errorf("unsupported adapter type: %s", fw.AdapterType)
 }

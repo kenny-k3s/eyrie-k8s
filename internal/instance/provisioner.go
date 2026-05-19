@@ -10,11 +10,11 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/fileutil"
 	"github.com/Audacity88/eyrie/internal/persona"
+	"github.com/google/uuid"
 )
 
 // TemplateContext is passed to identity file templates when rendering.
@@ -52,7 +52,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		return nil, fmt.Errorf("framework: %w", ErrRequiredField)
 	}
 	switch req.Framework {
-	case adapter.FrameworkZeroClaw, adapter.FrameworkOpenClaw, adapter.FrameworkHermes, adapter.FrameworkPicoClaw, adapter.FrameworkEmbedded:
+	case adapter.FrameworkZeroClaw, adapter.FrameworkOpenClaw, adapter.FrameworkHermes, adapter.FrameworkPicoClaw, adapter.FrameworkEmbedded, adapter.FrameworkCodex:
 		// valid
 	default:
 		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
@@ -71,9 +71,9 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 			return nil, fmt.Errorf("instance name %q: %w", req.Name, ErrNameExists)
 		}
 	}
-	// Embedded agents run in-process — no gateway port needed.
+	// Embedded and Codex App Server agents do not expose a persistent gateway port.
 	var port int
-	if req.Framework != adapter.FrameworkEmbedded {
+	if req.Framework != adapter.FrameworkEmbedded && req.Framework != adapter.FrameworkCodex {
 		port, err = AllocatePort(existing)
 		if err != nil {
 			return nil, fmt.Errorf("port allocation failed: %w", err)
@@ -89,7 +89,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	switch req.Framework {
 	case "zeroclaw":
 		configExt = "toml"
-	case "openclaw", "picoclaw", "embedded":
+	case "openclaw", "picoclaw", "embedded", "codex":
 		configExt = "json"
 	case "hermes":
 		configExt = "yaml"
@@ -146,12 +146,15 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		Framework:          inst.Framework,
 		EyrieURL:           "http://localhost:7200",
 		ParentAgent:        req.ParentID,
+		Role:               string(req.HierarchyRole),
 		ProjectName:        req.ProjectName,
 		ProjectGoal:        req.ProjectGoal,
 		ProjectDescription: req.ProjectDescription,
 	}
 	if pers != nil {
-		tc.Role = pers.Role
+		if pers.Role != "" {
+			tc.Role = pers.Role
+		}
 		tc.Description = pers.Description
 	}
 
@@ -180,7 +183,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 
 func (p *Provisioner) renderIdentityFiles(workspaceDir string, role HierarchyRole, pers *persona.Persona, tc TemplateContext) error {
 	// If persona has identity templates, use those; otherwise use defaults
-	templates := defaultIdentityTemplates(role)
+	templates := defaultIdentityTemplates(role, tc.Framework)
 	if pers != nil && len(pers.IdentityTemplate) > 0 {
 		for k, v := range pers.IdentityTemplate {
 			templates[k] = v
@@ -229,6 +232,8 @@ func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, mode
 		return p.generatePicoClawConfig(inst, provider, model)
 	case "embedded":
 		return p.generateEmbeddedConfig(inst, provider, model, pers)
+	case "codex":
+		return p.generateCodexConfig(inst, model)
 	default:
 		return fmt.Errorf("unsupported framework %q", inst.Framework)
 	}
@@ -338,6 +343,8 @@ func parentProviderDefaults(framework string) (model, provider string) {
 	switch framework {
 	case "zeroclaw":
 		parentConfigPath = config.ExpandHome("~/.zeroclaw/config.toml")
+	case "codex":
+		return "gpt-5.4", "openai"
 	default:
 		// Other frameworks: use fallback defaults for now.
 		// TODO: read parent config for openclaw, picoclaw, hermes
@@ -403,12 +410,12 @@ func (p *Provisioner) generatePicoClawConfig(inst *Instance, provider, model str
 		"version": 1,
 		"agents": map[string]any{
 			"defaults": map[string]any{
-				"workspace":            inst.WorkspacePath,
+				"workspace":             inst.WorkspacePath,
 				"restrict_to_workspace": true,
-				"provider":             provider,
-				"model_name":           model,
-				"max_tokens":           32768,
-				"max_tool_iterations":  50,
+				"provider":              provider,
+				"model_name":            model,
+				"max_tokens":            32768,
+				"max_tool_iterations":   50,
 			},
 		},
 		"gateway": map[string]any{
@@ -462,13 +469,82 @@ func (p *Provisioner) generateEmbeddedConfig(inst *Instance, provider, model str
 	return config.WriteJSONAtomic(inst.ConfigPath, cfg)
 }
 
+func (p *Provisioner) generateCodexConfig(inst *Instance, model string) error {
+	codexHome := filepath.Join(filepath.Dir(inst.ConfigPath), "codex-home")
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return fmt.Errorf("creating codex home: %w", err)
+	}
+	if err := seedCodexAuth(codexHome); err != nil {
+		return fmt.Errorf("seeding codex auth: %w", err)
+	}
+
+	cfg := map[string]any{
+		"binary_path":       "codex",
+		"cwd":               inst.WorkspacePath,
+		"codex_home":        codexHome,
+		"instructions_path": filepath.Join(inst.WorkspacePath, "AGENTS.md"),
+		"model":             model,
+		"effort":            "medium",
+		"approval_policy":   "untrusted",
+		"sandbox":           "workspaceWrite",
+		"network_access":    false,
+		"threads":           map[string]string{},
+	}
+	return config.WriteJSONAtomic(inst.ConfigPath, cfg)
+}
+
+func seedCodexAuth(codexHome string) error {
+	sourceHome := sourceCodexHome()
+	if sourceHome == "" || sourceHome == codexHome {
+		return nil
+	}
+	return copyFileIfMissing(
+		filepath.Join(sourceHome, "auth.json"),
+		filepath.Join(codexHome, "auth.json"),
+		0o600,
+	)
+}
+
+func sourceCodexHome() string {
+	if env := os.Getenv("CODEX_HOME"); env != "" {
+		return config.ExpandHome(env)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
+}
+
+func copyFileIfMissing(src, dst string, perm os.FileMode) error {
+	if _, err := os.Stat(dst); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	data, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, perm)
+}
+
 // --- Default identity templates ---
 
-func defaultIdentityTemplates(role HierarchyRole) map[string]string {
+func defaultIdentityTemplates(role HierarchyRole, framework string) map[string]string {
 	templates := map[string]string{
 		"IDENTITY.md": defaultIdentityMD,
 		"SOUL.md":     defaultSoulMD,
 		"MEMORY.md":   defaultMemoryMD,
+	}
+	if framework == adapter.FrameworkCodex {
+		templates["AGENTS.md"] = codexAgentsMD
 	}
 
 	switch role {
@@ -570,6 +646,35 @@ const talonIdentityMD = `# IDENTITY.md
 You are a Talon — a specialist agent within a project team. Focus on your
 specific expertise and deliver high-quality work in your domain. Report
 progress and blockers to your Captain.
+`
+
+const codexAgentsMD = `# AGENTS.md
+
+You are {{.DisplayName}}, a long-lived Eyrie agent powered by Codex App Server.
+
+## Operating Context
+
+- Role: {{.Role}}
+- Project: {{if .ProjectName}}{{.ProjectName}}{{else}}unassigned{{end}}
+- Goal: {{if .ProjectGoal}}{{.ProjectGoal}}{{else}}not specified{{end}}
+- Parent agent: {{if .ParentAgent}}{{.ParentAgent}}{{else}}none{{end}}
+
+Eyrie owns your identity, project routing, hierarchy role, workspace, and
+approval boundary. Codex owns the coding runtime, tool execution, conversation
+turns, diffs, and local repository work.
+
+## Local Identity Files
+
+Read and follow these workspace files when present:
+
+- SOUL.md
+- IDENTITY.md
+- TOOLS.md
+- MEMORY.md
+
+Use the Eyrie workspace as your operating boundary. Do not push, post public
+comments, or perform external/project mutations unless the user or captain has
+explicitly approved that action.
 `
 
 const commanderToolsMD = `# TOOLS.md — Eyrie API

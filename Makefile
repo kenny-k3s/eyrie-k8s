@@ -1,6 +1,6 @@
 BINARY_NAME := eyrie
 BUILD_DIR := bin
-VERSION := 0.2.0
+VERSION := 0.2.1
 LDFLAGS := -ldflags "-X github.com/Audacity88/eyrie/internal/config.Version=$(VERSION)"
 GOBIN := $(shell go env GOPATH)/bin
 

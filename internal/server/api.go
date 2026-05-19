@@ -235,7 +235,7 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	// Fall back to the instance store so the user can restart it.
 	if inst := s.findInstanceByName(name); inst != nil {
 		var execErr error
-		if inst.Framework == adapter.FrameworkEmbedded {
+		if inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex {
 			agent, findErr := s.findAgentAnyState(ctx, inst.Name)
 			if findErr != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": findErr.Error()})
@@ -534,7 +534,7 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	format := discoveredAgent.Framework
 	if discoveredAgent.Framework == "zeroclaw" {
 		format = "toml"
-	} else if discoveredAgent.Framework == "openclaw" {
+	} else if discoveredAgent.Framework == "openclaw" || discoveredAgent.Framework == "codex" {
 		format = "json"
 	} else if discoveredAgent.Framework == "hermes" {
 		format = "yaml"
@@ -676,7 +676,7 @@ func (s *Server) handleAgentConfigValidate(w http.ResponseWriter, r *http.Reques
 
 	// Determine format
 	format := "toml"
-	if discoveredAgent.Framework == "openclaw" {
+	if discoveredAgent.Framework == "openclaw" || discoveredAgent.Framework == "codex" {
 		format = "json"
 	} else if discoveredAgent.Framework == "hermes" {
 		format = "yaml"

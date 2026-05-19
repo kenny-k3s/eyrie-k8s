@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestExtractVersion(t *testing.T) {
 	tests := []struct {
@@ -82,5 +85,52 @@ func TestVersionStatus(t *testing.T) {
 			t.Errorf("VersionStatus(%q, %q, %q) = %q, want %q",
 				tt.installed, tt.min, tt.latest, got, tt.want)
 		}
+	}
+}
+
+func TestIsSupportedAdapterType(t *testing.T) {
+	for _, adapterType := range []string{"http", "websocket", "cli", "hybrid", "app-server"} {
+		if !IsSupportedAdapterType(adapterType) {
+			t.Fatalf("expected %q to be supported", adapterType)
+		}
+	}
+	if IsSupportedAdapterType("unknown") {
+		t.Fatal("expected unknown adapter type to be unsupported")
+	}
+}
+
+func TestDefaultConfigDocumentUsesSchemaDefaults(t *testing.T) {
+	fw := Framework{
+		ConfigFormat: "json",
+		ConfigSchema: &ConfigSchema{CommonFields: []ConfigField{
+			{Key: "binary_path", Default: "codex"},
+			{Key: "model", Default: "gpt-5.4"},
+			{Key: "network_access", Default: false},
+			{Key: "runtime.cwd", Default: "/tmp/eyrie"},
+			{Key: "without_default"},
+		}},
+	}
+
+	data, ok, err := fw.DefaultConfigDocument()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected default config document")
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["binary_path"] != "codex" || got["model"] != "gpt-5.4" || got["network_access"] != false {
+		t.Fatalf("unexpected flat defaults: %#v", got)
+	}
+	runtime, ok := got["runtime"].(map[string]any)
+	if !ok || runtime["cwd"] != "/tmp/eyrie" {
+		t.Fatalf("unexpected nested defaults: %#v", got)
+	}
+	if _, ok := got["without_default"]; ok {
+		t.Fatalf("field without default should be omitted: %#v", got)
 	}
 }

@@ -105,12 +105,13 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer startCancel()
 
-		if inst.Framework == adapter.FrameworkEmbedded {
-			// Embedded agents are started by calling the adapter directly.
+		if inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex {
+			// Embedded and Codex App Server agents are started by calling the
+			// adapter directly; neither has a persistent framework gateway.
 			// Trigger a discovery cycle first so the adapter is created and cached.
 			agent, findErr := s.findAgentAnyState(startCtx, inst.Name)
 			if findErr != nil {
-				autoStartErr = fmt.Errorf("finding embedded adapter: %w", findErr)
+				autoStartErr = fmt.Errorf("finding %s adapter: %w", inst.Framework, findErr)
 			} else {
 				autoStartErr = agent.Start(startCtx)
 			}
@@ -125,8 +126,8 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		if autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = instance.StatusError
-		} else if inst.Framework == adapter.FrameworkEmbedded {
-			// Embedded Start() is synchronous — agent is running now
+		} else if inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex {
+			// These adapters do not run external daemons; Start() validates readiness.
 			inst.Status = instance.StatusRunning
 		} else {
 			// External frameworks: set to "starting", discovery will confirm "running"
@@ -334,12 +335,12 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer execCancel()
 
-	if inst.Framework == adapter.FrameworkEmbedded {
-		// Embedded agents run in-process — delegate to the adapter directly
-		// rather than calling the manager (which has no external process to manage).
+	if inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex {
+		// Embedded/Codex agents have no separate framework daemon — delegate
+		// to the adapter rather than calling the manager.
 		agent, findErr := s.findAgentAnyState(execCtx, inst.Name)
 		if findErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("finding embedded adapter: %v", findErr)})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("finding %s adapter: %v", inst.Framework, findErr)})
 			return
 		}
 		var adapterErr error
@@ -375,14 +376,14 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update status — for embedded agents, Start() is synchronous so we can
-	// set "running" directly. For external frameworks, use "starting" and
+	// Update status — for embedded/Codex agents, Start() is synchronous so we
+	// can set "running" directly. For external frameworks, use "starting" and
 	// let discovery confirm "running" once the process is alive.
 	newStatus := instance.StatusStarting
 	if action == "stop" {
 		newStatus = instance.StatusStopped
 	}
-	if inst.Framework == adapter.FrameworkEmbedded && action != "stop" {
+	if (inst.Framework == adapter.FrameworkEmbedded || inst.Framework == adapter.FrameworkCodex) && action != "stop" {
 		newStatus = instance.StatusRunning
 	}
 	if err := store.UpdateStatus(id, newStatus); err != nil {

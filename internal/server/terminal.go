@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/creack/pty"
 	"nhooyr.io/websocket"
 )
 
@@ -232,6 +232,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	case "picoclaw":
 		binaryPath = os.ExpandEnv("$HOME/go/bin/picoclaw")
 		args = []string{"agent"} // picoclaw agent subcommand for interactive chat
+	case "codex":
+		binaryPath = config.LookPathEnriched("codex")
+		args = []string{}
 	default:
 		slog.Error("No terminal support for framework", "agent", name, "framework", agentResult.Agent.Framework)
 		return
