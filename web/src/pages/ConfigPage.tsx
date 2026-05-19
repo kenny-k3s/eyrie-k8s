@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Save, FileText, Code, Loader2, CheckCircle } from "lucide-react";
+import { ArrowLeft, Save, FileText, Code, Loader2, CheckCircle, Radio } from "lucide-react";
 import { fetchAgents } from "../lib/api";
 import {
   fetchAgentConfig,
@@ -12,6 +12,7 @@ import type { Framework, AgentInfo } from "../lib/types";
 import APIKeyBanner from "../components/APIKeyBanner";
 import ConfigForm from "../components/ConfigForm";
 import ConfigEditor from "../components/ConfigEditor";
+import { extractChannelToggles, setChannelEnabled } from "../lib/configChannels";
 
 export default function ConfigPage() {
   const { agentName } = useParams<{ agentName: string }>();
@@ -27,6 +28,10 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const channelToggles = extractChannelToggles(
+    rawConfig,
+    framework?.config_format,
+  );
 
   // Load agent and config on mount
   useEffect(() => {
@@ -58,6 +63,9 @@ export default function ConfigPage() {
         try {
           const parsed = parseConfig(cfg.content, fw.config_format);
           setFormData(parsed);
+          if (fw.config_format !== "json") {
+            setMode("raw");
+          }
         } catch (err) {
           console.error("Failed to parse config:", err);
           // Fall back to raw mode if parsing fails
@@ -81,6 +89,11 @@ export default function ConfigPage() {
     // For TOML and YAML, we'd need proper parsers
     // For now, just return empty object and stay in raw mode
     return {};
+  };
+
+  const handleChannelToggle = (channelName: string, enabled: boolean) => {
+    setRawConfig((prev) => setChannelEnabled(prev, channelName, enabled));
+    setSaveSuccess(false);
   };
 
   // Handle field change in form mode
@@ -264,6 +277,35 @@ export default function ConfigPage() {
           <CheckCircle className="w-4 h-4" />
           configuration saved successfully
         </div>
+      )}
+
+      {channelToggles.length > 0 && (
+        <section className="mb-6 border border-border rounded-lg bg-bg-subtle p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Radio className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-fg">channels</h2>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {channelToggles.map((channel) => (
+              <label
+                key={channel.name}
+                className="flex items-center justify-between gap-3 rounded border border-border bg-bg px-3 py-2"
+              >
+                <span className="text-sm font-medium text-fg">
+                  {channel.name}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={channel.enabled}
+                  onChange={(event) =>
+                    handleChannelToggle(channel.name, event.target.checked)
+                  }
+                  className="h-4 w-4 rounded border-border bg-bg-subtle text-accent focus:ring-2 focus:ring-accent/50"
+                />
+              </label>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* Form or Editor */}

@@ -96,7 +96,7 @@ export default function CommanderChat({ phase }: Props) {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
 
-  const scrollRef = useAutoScroll([items]);
+  const { ref: scrollRef } = useAutoScroll([items]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
 

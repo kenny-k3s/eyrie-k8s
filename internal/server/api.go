@@ -682,6 +682,21 @@ func (s *Server) handleAgentConfigValidate(w http.ResponseWriter, r *http.Reques
 		format = "yaml"
 	}
 
+	if rawStr, ok := body.Config.(string); ok {
+		if err := config.ValidateRawFormat(format, rawStr); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"valid": false,
+				"error": fmt.Sprintf("invalid %s config: %v", format, err),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid":   true,
+			"message": "configuration is valid",
+		})
+		return
+	}
+
 	// Create temp file for validation
 	tempFile, err := os.CreateTemp("", fmt.Sprintf("eyrie-validate-%s-*.%s", name, format))
 	if err != nil {

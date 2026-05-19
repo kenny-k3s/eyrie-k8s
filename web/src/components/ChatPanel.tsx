@@ -249,8 +249,8 @@ export function ChatPanel({
 
   const refreshCurrentSession = useCallback(
     (key: string) => {
-      if (!key || backendDown) return;
-      fetchChatMessages(agentName, key, 100)
+      if (!key || backendDown) return Promise.resolve();
+      return fetchChatMessages(agentName, key, 100)
         .then((msgs) => {
           setSessionMsgs((prev) => {
             const next = new Map(prev);
@@ -443,7 +443,14 @@ export function ChatPanel({
   }, [pendingKey, lastCurrentMsg, totalMsgCount]);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────
-  const scrollRef = useAutoScroll([totalMsgCount, lastMessageKey, sending, waitingForReply, streamingContent, toolCalls]);
+  const { ref: scrollRef, scrollToBottom } = useAutoScroll([
+    totalMsgCount,
+    lastMessageKey,
+    sending,
+    waitingForReply,
+    streamingContent,
+    toolCalls,
+  ]);
 
   // WHY: Track briefing by a composite key (agent + timestamp) rather than
   // a simple boolean. A boolean ref gets reset by React Strict Mode's
@@ -502,6 +509,7 @@ export function ChatPanel({
           setToolCalls([]);
           setSending(false);
           setPendingReply(false);
+          scrollToBottom();
           onDone();
           break;
         }
@@ -514,7 +522,7 @@ export function ChatPanel({
           break;
       }
     },
-    [agentName, setPendingReply],
+    [agentName, scrollToBottom, setPendingReply],
   );
 
 
@@ -557,14 +565,15 @@ export function ChatPanel({
           inputRef.current?.focus();
           if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
           refreshTimeoutRef.current = setTimeout(() => {
-            refreshCurrentSession(currentSessionKey);
+            const refresh = refreshCurrentSession(currentSessionKey);
             refreshSessions();
+            refresh.finally(scrollToBottom);
           }, 500);
         });
       },
     );
     abortRef.current = controller;
-  }, [input, sending, backendDown, agentName, currentSessionKey, refreshCurrentSession, refreshSessions, handleChatEvent, setPendingReply]);
+  }, [input, sending, backendDown, agentName, currentSessionKey, refreshCurrentSession, refreshSessions, handleChatEvent, scrollToBottom, setPendingReply]);
 
   useEffect(() => {
     if (!backendDown) return;
@@ -734,6 +743,7 @@ export function ChatPanel({
       <div
         ref={scrollRef}
         className={`flex-1 overflow-y-auto border-x border-border bg-surface text-xs ${groups.length === 0 ? "rounded-t border-t" : ""}`}
+        style={{ overflowAnchor: "none" }}
       >
         {longMsgItems.length > 0 && (
           <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">

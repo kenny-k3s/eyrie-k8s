@@ -76,7 +76,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
-  const scrollRef = useAutoScroll([messages, streamingParts]);
+  const { ref: scrollRef } = useAutoScroll([messages, streamingParts]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latency tracking: measures time from handoff to first token per agent.
