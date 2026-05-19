@@ -73,7 +73,34 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 }
 
 func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
-	return runWithNode22(ctx, "openclaw", "gateway", string(action))
+	logDir := config.ExpandHome("~/.openclaw/logs")
+	switch action {
+	case ActionStart:
+		return runDetachedWithNode22(ctx, logDir, "openclaw", "gateway", "run")
+	case ActionRestart:
+		if err := stopOpenClawGateway(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "eyrie: openclaw stop before restart: %v\n", err)
+		}
+		return runDetachedWithNode22(ctx, logDir, "openclaw", "gateway", "run")
+	case ActionStop:
+		return stopOpenClawGateway(ctx)
+	default:
+		return fmt.Errorf("unknown action %q for openclaw", action)
+	}
+}
+
+func stopOpenClawGateway(ctx context.Context) error {
+	svcErr := runWithNode22(ctx, "openclaw", "gateway", "stop")
+	killCmd := exec.CommandContext(ctx, "pkill", "-f", `(openclaw.*gateway run|dist/index\.js gateway)`)
+	killErr := killCmd.Run()
+	if svcErr == nil || killErr == nil {
+		return nil
+	}
+	if exitErr, ok := killErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		// No matching foreground gateway is already the requested stopped state.
+		return nil
+	}
+	return fmt.Errorf("service stop: %v; pkill: %v", svcErr, killErr)
 }
 
 // node22BinDir finds the nvm-managed Node.js v22 bin directory.
@@ -356,21 +383,26 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 			return fmt.Errorf("unknown action %q for zeroclaw", action)
 		}
 	case "openclaw":
-		if action == ActionStart || action == ActionRestart {
-			ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
-			env := mergeEnv(extraEnv)
-			// Also prepend Node 22 to PATH
-			if n22 := node22BinDir(); n22 != "" {
-				for i, e := range env {
-					if strings.HasPrefix(e, "PATH=") {
-						env[i] = "PATH=" + n22 + string(os.PathListSeparator) + e[5:]
-						break
-					}
+		ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+		env := mergeEnv(extraEnv)
+		env = append(env, "OPENCLAW_CONFIG_PATH="+configPath)
+		if n22 := node22BinDir(); n22 != "" {
+			for i, e := range env {
+				if strings.HasPrefix(e, "PATH=") {
+					env[i] = "PATH=" + n22 + string(os.PathListSeparator) + e[5:]
+					break
 				}
 			}
-			return runDetachedWithEnv(ctx, ocLogDir, env, "openclaw", "gateway", string(action), "--config", configPath)
 		}
-		return runWithNode22(ctx, "openclaw", "gateway", string(action), "--config", configPath)
+		if action == ActionStart || action == ActionRestart {
+			if action == ActionRestart {
+				if err := stopOpenClawGateway(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "eyrie: openclaw stop before restart: %v\n", err)
+				}
+			}
+			return runDetachedWithEnv(ctx, ocLogDir, env, "openclaw", "gateway", "run")
+		}
+		return stopOpenClawGateway(ctx)
 	case "hermes":
 		if action == ActionStart || action == ActionRestart {
 			hLogDir := filepath.Join(filepath.Dir(configPath), "logs")
@@ -444,11 +476,21 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			return fmt.Errorf("unknown action %q for zeroclaw", action)
 		}
 	case "openclaw":
-		if action == ActionStart || action == ActionRestart {
-			ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
-			return runDetachedWithNode22(ctx, ocLogDir, "openclaw", "gateway", string(action), "--config", configPath)
+		ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+		env := node22Env()
+		if env == nil {
+			env = config.EnrichedEnv()
 		}
-		return runWithNode22(ctx, "openclaw", "gateway", string(action), "--config", configPath)
+		env = append(env, "OPENCLAW_CONFIG_PATH="+configPath)
+		if action == ActionStart || action == ActionRestart {
+			if action == ActionRestart {
+				if err := stopOpenClawGateway(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "eyrie: openclaw stop before restart: %v\n", err)
+				}
+			}
+			return runDetachedWithEnv(ctx, ocLogDir, env, "openclaw", "gateway", "run")
+		}
+		return stopOpenClawGateway(ctx)
 	case "hermes":
 		if action == ActionStart || action == ActionRestart {
 			hLogDir := filepath.Join(filepath.Dir(configPath), "logs")
