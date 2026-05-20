@@ -13,3 +13,4 @@ backup/
 .cursor/
 COMMANDS.sh
 *.tsbuildinfo
+docs/Terminal Saved Output*.txt

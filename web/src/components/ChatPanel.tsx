@@ -33,6 +33,7 @@ import {
 import { StreamingIndicator } from "./chat/StreamingIndicator";
 import type { StreamingPart } from "./chat/StreamingIndicator";
 import { useAutoScroll } from "../lib/useAutoScroll";
+import { reconcilePendingMessages } from "../lib/chatMessageReconcile";
 import { useData } from "../lib/DataContext";
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -87,19 +88,6 @@ function groupSessions(sessions: Session[]): SessionGroup[] {
   }
   return Array.from(map.values()).sort(
     (a, b) => groupLastActivity(b) - groupLastActivity(a),
-  );
-}
-
-function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
-  return a.role === b.role && a.content === b.content;
-}
-
-function reconcilePendingMessages(
-  pending: ChatMessage[],
-  fetched: ChatMessage[],
-): ChatMessage[] {
-  return pending.filter(
-    (pendingMsg) => !fetched.some((msg) => sameMessage(msg, pendingMsg)),
   );
 }
 
