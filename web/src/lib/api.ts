@@ -442,11 +442,42 @@ export async function putRawFrameworkConfig(
 }
 
 export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
+  const now = Date.now();
+  if (!refresh && frameworksCache && now - frameworksCacheAt < FRAMEWORKS_CACHE_TTL) {
+    return frameworksCache;
+  }
+  if (!refresh && frameworksInFlight) {
+    return frameworksInFlight;
+  }
+
+  const request = fetchFrameworksUncached(refresh);
+  if (!refresh) frameworksInFlight = request;
+  try {
+    return await request;
+  } catch (err) {
+    if (!refresh && frameworksCache) return frameworksCache;
+    throw err;
+  } finally {
+    if (!refresh && frameworksInFlight === request) {
+      frameworksInFlight = null;
+    }
+  }
+}
+
+let frameworksCache: Framework[] | null = null;
+let frameworksCacheAt = 0;
+let frameworksInFlight: Promise<Framework[]> | null = null;
+const FRAMEWORKS_CACHE_TTL = 30_000;
+
+async function fetchFrameworksUncached(refresh: boolean): Promise<Framework[]> {
   const qs = refresh ? "?refresh=true" : "";
   const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks${qs}`);
   if (!res.ok)
     throw new Error(`Failed to fetch frameworks: ${res.statusText}`);
-  return res.json();
+  const frameworks = await res.json();
+  frameworksCache = frameworks;
+  frameworksCacheAt = Date.now();
+  return frameworks;
 }
 
 // Persona API

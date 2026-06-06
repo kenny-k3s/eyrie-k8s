@@ -5,6 +5,7 @@ import { useData } from "../lib/DataContext";
 import { FRAMEWORK_EMOJI, type Framework } from "../lib/types";
 import { fetchFrameworks } from "../lib/api";
 import { getFrameworkStatus } from "../lib/frameworkStatus";
+import { frameworkDotClass, sidebarFrameworkIds } from "../lib/sidebarFrameworks";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
@@ -65,10 +66,11 @@ export default function Sidebar() {
   // the sidebar even when no agent is running (discovery only returns running
   // ones), while keeping enough state to render the correct status dot.
   const [frameworksById, setFrameworksById] = useState<Record<string, Framework>>({});
-  const installedFrameworks = useMemo(
-    () => Object.values(frameworksById)
-      .filter((fw) => fw.installed || fw.configured)
-      .map((fw) => fw.id),
+  const readyFrameworks = useMemo(
+    () => Object.values(frameworksById).map((fw) => ({
+      id: fw.id,
+      status: getFrameworkStatus(fw),
+    })),
     [frameworksById],
   );
   useEffect(() => {
@@ -237,9 +239,7 @@ export default function Sidebar() {
 
         {/* ── Frameworks ── */}
         {(() => {
-          // Merge frameworks with running agents + installed frameworks from registry
-          const fromAgents = agents.map((a) => a.framework);
-          const frameworks = [...new Set([...installedFrameworks, ...fromAgents])];
+          const frameworks = sidebarFrameworkIds(readyFrameworks, agents.map((a) => a.framework));
           return (
             <>
               <div className={`flex items-center rounded text-xs transition-colors ${
@@ -271,19 +271,9 @@ export default function Sidebar() {
               {frameworksExpanded && (
                 <div id="frameworks-list" className="ml-4 border-l border-border pl-2 space-y-px">
                   {frameworks.map((fw) => {
-                    const fwAgents = agents.filter((a) => a.framework === fw);
-                    const aliveCount = fwAgents.filter((a) => a.alive).length;
                     const registryFramework = frameworksById[fw];
                     const registryStatus = registryFramework ? getFrameworkStatus(registryFramework) : null;
-                    const dotClass = aliveCount > 0
-                      ? "bg-green"
-                      : fwAgents.length > 0
-                        ? "bg-red"
-                        : registryStatus?.isReady
-                          ? "bg-green"
-                          : registryStatus?.isInstalled || registryStatus?.isConfigured
-                            ? "bg-yellow"
-                            : "bg-text-muted/30";
+                    const dotClass = frameworkDotClass(registryStatus);
                     const emoji = FRAMEWORK_EMOJI[fw] || "";
                     return (
                       <Link

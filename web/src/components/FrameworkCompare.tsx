@@ -295,8 +295,13 @@ export default function FrameworkCompare() {
 
   // ── Framework list ───────────────────────────────────────────────────
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
+  const frameworksRef = useRef<Framework[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    frameworksRef.current = frameworks;
+  }, [frameworks]);
 
   // Scroll to the relevant section once frameworks finish loading.
   // highlight takes priority over compare — if both URL params are set,
@@ -312,15 +317,27 @@ export default function FrameworkCompare() {
   const loadFrameworks = useCallback(async (refresh = false) => {
     if (backendDown) {
       setLoading(false);
+      setRefreshing(false);
       setError(null);
       return;
     }
+    const hasFrameworks = frameworksRef.current.length > 0;
     try {
-      setLoading(true); setError(null);
+      if (hasFrameworks) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
       setFrameworks(await fetchFrameworks(refresh));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load frameworks");
-    } finally { setLoading(false); }
+      if (!hasFrameworks) {
+        setError(e instanceof Error ? e.message : "Failed to load frameworks");
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [backendDown]);
 
   useEffect(() => {
@@ -358,10 +375,10 @@ export default function FrameworkCompare() {
         </div>
         <button
           onClick={() => loadFrameworks(true)}
-          disabled={loading || backendDown}
+          disabled={loading || refreshing || backendDown}
           className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading || refreshing ? "animate-spin" : ""}`} />
           $ refresh
         </button>
       </div>
@@ -385,7 +402,7 @@ export default function FrameworkCompare() {
       )}
 
       {/* Framework cards with install + metadata */}
-      {!loading && frameworks.length > 0 && (
+      {frameworks.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {frameworks.map((fw) => {
             const caps = CAPABILITIES[fw.id];

@@ -169,6 +169,20 @@ type frameworkWithStatus struct {
 	VersionStatus string `json:"version_status,omitempty"` // "outdated", "update_available", "current"
 }
 
+type frameworkVersionCacheEntry struct {
+	version   string
+	expiresAt time.Time
+	modTime   time.Time
+	size      int64
+}
+
+var (
+	frameworkVersionCacheMu sync.Mutex
+	frameworkVersionCache   = map[string]frameworkVersionCacheEntry{}
+)
+
+const frameworkVersionCacheTTL = 5 * time.Minute
+
 // handleListFrameworks returns all frameworks from the registry with installation status
 func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -250,21 +264,58 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 // output, trimmed. Returns "" if the binary doesn't exist, isn't executable,
 // or the command fails. Bounded to 3s to avoid hanging on unresponsive binaries.
 func frameworkVersion(fw registry.Framework) string {
+	binaryPath := resolveFrameworkBinaryPath(fw)
+	now := time.Now()
+	stat, statErr := os.Stat(binaryPath)
+
+	if statErr == nil {
+		frameworkVersionCacheMu.Lock()
+		entry, ok := frameworkVersionCache[binaryPath]
+		if ok && now.Before(entry.expiresAt) && entry.modTime.Equal(stat.ModTime()) && entry.size == stat.Size() {
+			frameworkVersionCacheMu.Unlock()
+			return entry.version
+		}
+		frameworkVersionCacheMu.Unlock()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
+	version := ""
+	if err != nil {
+		version = ""
+	} else {
+		version = strings.TrimSpace(string(out))
+		if i := strings.IndexByte(version, '\n'); i >= 0 {
+			version = strings.TrimSpace(version[:i])
+		}
+	}
+
+	if statErr == nil {
+		frameworkVersionCacheMu.Lock()
+		frameworkVersionCache[binaryPath] = frameworkVersionCacheEntry{
+			version:   version,
+			expiresAt: now.Add(frameworkVersionCacheTTL),
+			modTime:   stat.ModTime(),
+			size:      stat.Size(),
+		}
+		frameworkVersionCacheMu.Unlock()
+	}
+	return version
+}
+
+func resolveFrameworkBinaryPath(fw registry.Framework) string {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
 	if !strings.ContainsAny(binaryPath, `/\`) {
 		binaryPath = config.LookPathEnriched(binaryPath)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	line := strings.TrimSpace(string(out))
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = strings.TrimSpace(line[:i])
-	}
-	return line
+	return binaryPath
+}
+
+func resetFrameworkVersionCacheForTest() {
+	frameworkVersionCacheMu.Lock()
+	defer frameworkVersionCacheMu.Unlock()
+	frameworkVersionCache = map[string]frameworkVersionCacheEntry{}
 }
 
 // handleInstallFramework installs a framework with SSE progress streaming
