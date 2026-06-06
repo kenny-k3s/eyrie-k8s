@@ -17,8 +17,10 @@ import { fetchCommandRoom, fetchHierarchy, streamCommandRoomDispatch, type Comma
 import type {
   AgentInfo,
   CommandRoom,
+  CommandRoomArtifactRef,
   CommandRoomBoardItem,
   CommandRoomDevelopmentNotice,
+  CommandRoomProjectControl,
   CommandRoomDevelopmentWorkItem,
   CommandRoomRuntimeSmoke,
   CommandRoomRuntime,
@@ -352,6 +354,62 @@ function DevelopmentWorkItemCard({ item }: { item: CommandRoomDevelopmentWorkIte
   );
 }
 
+function ArtifactPill({ artifact }: { artifact: CommandRoomArtifactRef }) {
+  return (
+    <span
+      className="min-w-0 truncate rounded border border-border bg-bg/70 px-1.5 py-0.5 text-[8px] text-text-muted"
+      title={artifact.path}
+    >
+      {artifact.title || shortPath(artifact.path)}
+    </span>
+  );
+}
+
+function ProjectControlCard({ control }: { control: CommandRoomProjectControl }) {
+  const notices = control.notices ?? [];
+  const responsePackets = control.response_packets ?? [];
+  const reports = control.reports ?? [];
+  return (
+    <div className="rounded border border-yellow/30 bg-yellow/5 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-[11px] font-bold text-text">{control.title || control.id}</div>
+          <div className="mt-1 truncate text-[9px] text-text-muted">
+            {control.parent_project?.title || control.parent_project_id || "project"} | {control.owner || "-"}
+          </div>
+        </div>
+        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] ${priorityTone(control.priority)}`}>
+          {control.status || "active"}
+        </span>
+      </div>
+      {control.next_action && <p className="mt-2 line-clamp-3 text-[10px] leading-relaxed text-text-secondary">{control.next_action}</p>}
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="rounded border border-border bg-bg/70 px-2 py-1.5">
+          <div className="text-[8px] uppercase tracking-wider text-text-muted">notices</div>
+          <div className="mt-1 text-sm font-bold text-text">{notices.length}</div>
+        </div>
+        <div className="rounded border border-border bg-bg/70 px-2 py-1.5">
+          <div className="text-[8px] uppercase tracking-wider text-text-muted">packets</div>
+          <div className="mt-1 text-sm font-bold text-text">{responsePackets.length}</div>
+        </div>
+        <div className="rounded border border-border bg-bg/70 px-2 py-1.5">
+          <div className="text-[8px] uppercase tracking-wider text-text-muted">reports</div>
+          <div className="mt-1 text-sm font-bold text-text">{reports.length}</div>
+        </div>
+      </div>
+      <div className="mt-3 rounded border border-yellow/30 bg-bg/70 px-2 py-1.5 text-[9px] leading-snug text-yellow">
+        {control.route_boundary}
+      </div>
+      {(responsePackets.length > 0 || reports.length > 0) && (
+        <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+          {responsePackets.slice(0, 2).map((artifact) => <ArtifactPill key={artifact.path} artifact={artifact} />)}
+          {reports.slice(0, 2).map((artifact) => <ArtifactPill key={artifact.path} artifact={artifact} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RuntimeSmokeCard({ smoke }: { smoke: CommandRoomRuntimeSmoke }) {
   return (
     <div className="rounded border border-blue/30 bg-blue/5 p-3">
@@ -521,6 +579,7 @@ export default function CommandRoomPage() {
   const developmentMesh = room?.development_mesh;
   const developmentAssignments = developmentMesh?.assignments ?? [];
   const developmentWorkItems = developmentMesh?.work_items ?? [];
+  const projectControls = developmentMesh?.project_controls ?? [];
   const runtimeSmokes = developmentMesh?.runtime_smokes ?? [];
   const zeroClawAgents = useMemo(() => combineZeroClawAgents(room?.zeroclaw_agents ?? [], agents), [agents, room?.zeroclaw_agents]);
   const dispatchableZeroClawAgents = useMemo(() => zeroClawAgents.filter((agent) => agent.alive), [zeroClawAgents]);
@@ -812,6 +871,19 @@ export default function CommandRoomPage() {
                   {developmentWorkItems.slice(0, 2).map((item) => <DevelopmentWorkItemCard key={item.id} item={item} />)}
                 </>
               )}
+            </div>
+          </section>
+
+          <section className="border-b border-border p-4">
+            <div className="flex items-center gap-2">
+              <FileText className="h-3.5 w-3.5 text-yellow" />
+              <h2 className="text-xs font-bold uppercase tracking-wider text-text">project controls</h2>
+            </div>
+            <div className="mt-1 truncate text-[9px] text-text-muted">read-only Rowan / Magnus route</div>
+            <div className="mt-3 grid gap-2">
+              {projectControls.length === 0 ? (
+                <div className="text-xs text-text-muted">no Eyrie/Paperclip work-item controls loaded</div>
+              ) : projectControls.slice(0, 3).map((control) => <ProjectControlCard key={control.id} control={control} />)}
             </div>
           </section>
 

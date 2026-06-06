@@ -244,7 +244,6 @@ Head tested: bad7770bad7770bad7770bad7770bad7770bad7770
 
 	t.Setenv("EYRIE_AGENT_MESH_DIR", meshRoot)
 	t.Setenv("EYRIE_DEVELOPMENT_MESH_DIR", developmentMeshRoot)
-
 	req := httptest.NewRequest(http.MethodGet, "/api/command-room", nil)
 	rec := httptest.NewRecorder()
 	(&Server{}).handleCommandRoom(rec, req)
@@ -285,6 +284,128 @@ Head tested: bad7770bad7770bad7770bad7770bad7770bad7770
 	}
 	if !hasCommandRoomDataSource(payload.DataSources, "development mesh", developmentMeshRoot, "available") {
 		t.Fatalf("data sources = %#v, missing development mesh source", payload.DataSources)
+	}
+}
+
+func TestHandleCommandRoomBuildsProjectControlSurface(t *testing.T) {
+	root := t.TempDir()
+	meshRoot := filepath.Join(root, "eyrie", "docs", "agent-mesh")
+	magnusInbox := filepath.Join(meshRoot, "inboxes", "magnus.yaml")
+	developmentMeshRoot := filepath.Join(root, "Development", "Codex", "agent-mesh")
+	responsePath := filepath.Join(root, "Development", "Codex", "agents", "quill", "paperclip-response.md")
+	reportPath := filepath.Join(developmentMeshRoot, "reports", "rowan-eyrie-paperclip-adapter-notes-2026-05-18.md")
+
+	writeTestFile(t, filepath.Join(meshRoot, "manifest.yaml"), `---
+updated: "2026-05-22"
+status: provisional
+project: Eyrie
+project_id: eyrie
+owner: Magnus/Eyrie
+parent_agent:
+  id: magnus.eyrie
+  display_name: Magnus
+  planned_framework: codex
+  role: captain
+channels:
+  parent_inbox: "`+magnusInbox+`"
+  reports: "`+filepath.Join(meshRoot, "reports")+`"
+`)
+	writeTestFile(t, magnusInbox, `---
+updated: "2026-05-22"
+recipient: magnus.eyrie
+notices: []
+`)
+	writeTestFile(t, filepath.Join(developmentMeshRoot, "inboxes", "codex.yaml"), `---
+updated: "2026-05-22"
+recipient: development.quill
+notices:
+  - id: paperclip-control-request
+    title: Paperclip control-surface packet
+    from: development.rowan-a
+    to:
+      - development.quill
+    parent: development.rowan-a
+    status: answered
+    priority: high
+    summary: Join Paperclip mesh state for the Eyrie bridge.
+    request: Keep the Eyrie control surface read-only and route through Rowan and Magnus.
+    response: "`+responsePath+`"
+    approval_boundary: Read-only; no runtime, GitHub, commit, or mesh mutation.
+    context_refs:
+      - task-eyrie-paperclip-control-surface
+      - eyrie-zeroclaw-gui-bridge
+`)
+	writeTestFile(t, filepath.Join(developmentMeshRoot, "work-items", "project-eyrie-zeroclaw-gui-bridge.yaml"), `---
+id: eyrie-zeroclaw-gui-bridge
+kind: project
+title: Eyrie x ZeroClaw Multi-Agent GUI Bridge
+status: active
+priority: high
+lane: Rowan
+current_owner: development.rowan-a
+summary: Parent bridge project.
+next_action: Keep proposals routed through Rowan and Magnus.
+source_refs:
+  - "`+reportPath+`"
+`)
+	writeTestFile(t, filepath.Join(developmentMeshRoot, "work-items", "task-eyrie-paperclip-control-surface.yaml"), `---
+id: task-eyrie-paperclip-control-surface
+kind: task
+title: "Eyrie: Paperclip-inspired control surface"
+status: active
+priority: high
+lane: Tasks
+parent_project: eyrie-zeroclaw-gui-bridge
+current_owner: development.rowan
+summary: Build the first read-only project/work-item control surface.
+next_action: Join notices, response packets, reports, and work items without bypassing Rowan/Magnus.
+source_refs:
+  - "`+reportPath+`"
+labels:
+  - eyrie
+  - paperclip
+`)
+	writeTestFile(t, responsePath, "# Paperclip Response Packet\n\nReady for a read-only Eyrie surface.\n")
+	writeTestFile(t, reportPath, "# Rowan Eyrie / Paperclip Adapter Notes\n\nAdapter fields for the Eyrie bridge.\n")
+
+	t.Setenv("EYRIE_AGENT_MESH_DIR", meshRoot)
+	t.Setenv("EYRIE_DEVELOPMENT_MESH_DIR", developmentMeshRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/command-room", nil)
+	rec := httptest.NewRecorder()
+	(&Server{}).handleCommandRoom(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var payload commandRoomResponse
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.DevelopmentMesh == nil {
+		t.Fatalf("development mesh was nil")
+	}
+	if len(payload.DevelopmentMesh.ProjectControls) != 1 {
+		t.Fatalf("project controls = %#v, want one Eyrie/Paperclip control surface", payload.DevelopmentMesh.ProjectControls)
+	}
+	control := payload.DevelopmentMesh.ProjectControls[0]
+	if control.ID != "task-eyrie-paperclip-control-surface" || control.ParentProjectID != "eyrie-zeroclaw-gui-bridge" {
+		t.Fatalf("control = %#v, want paperclip task joined to parent project", control)
+	}
+	if control.RouteBoundary == "" || !strings.Contains(control.RouteBoundary, "Rowan") || !strings.Contains(control.RouteBoundary, "Magnus") {
+		t.Fatalf("route boundary = %q, want Rowan/Magnus boundary", control.RouteBoundary)
+	}
+	if len(control.Notices) != 1 || control.Notices[0].ID != "paperclip-control-request" {
+		t.Fatalf("notices = %#v, want matching control request", control.Notices)
+	}
+	if len(control.ResponsePackets) != 1 || control.ResponsePackets[0].Path != responsePath {
+		t.Fatalf("response packets = %#v, want response packet path", control.ResponsePackets)
+	}
+	if len(control.Reports) != 1 || control.Reports[0].Path != reportPath {
+		t.Fatalf("reports = %#v, want adapter report", control.Reports)
+	}
+	if control.ParentProject == nil || control.ParentProject.ID != "eyrie-zeroclaw-gui-bridge" {
+		t.Fatalf("parent project = %#v, want parent bridge project", control.ParentProject)
 	}
 }
 

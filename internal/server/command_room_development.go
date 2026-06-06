@@ -7,18 +7,20 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const commandRoomDevelopmentScope = "zeroclaw-labs/zeroclaw#6398"
 
 type commandRoomDevelopment struct {
-	Root          string                           `json:"root"`
-	Scope         string                           `json:"scope"`
-	Status        string                           `json:"status"`
-	Provenance    string                           `json:"provenance"`
-	Assignments   []commandRoomDevelopmentNotice   `json:"assignments"`
-	WorkItems     []commandRoomDevelopmentWorkItem `json:"work_items"`
-	RuntimeSmokes []commandRoomRuntimeSmoke        `json:"runtime_smokes"`
+	Root            string                           `json:"root"`
+	Scope           string                           `json:"scope"`
+	Status          string                           `json:"status"`
+	Provenance      string                           `json:"provenance"`
+	Assignments     []commandRoomDevelopmentNotice   `json:"assignments"`
+	WorkItems       []commandRoomDevelopmentWorkItem `json:"work_items"`
+	RuntimeSmokes   []commandRoomRuntimeSmoke        `json:"runtime_smokes"`
+	ProjectControls []commandRoomProjectControl      `json:"project_controls"`
 }
 
 type commandRoomDevelopmentNotice struct {
@@ -39,19 +41,50 @@ type commandRoomDevelopmentNotice struct {
 }
 
 type commandRoomDevelopmentWorkItem struct {
-	ID         string   `json:"id"`
-	Kind       string   `json:"kind,omitempty"`
-	Title      string   `json:"title"`
-	Status     string   `json:"status"`
-	Priority   string   `json:"priority"`
-	Lane       string   `json:"lane,omitempty"`
-	Owner      string   `json:"owner"`
-	Summary    string   `json:"summary"`
-	NextAction string   `json:"next_action"`
-	SourceRefs []string `json:"source_refs,omitempty"`
-	Updated    string   `json:"updated,omitempty"`
-	SourcePath string   `json:"source_path"`
-	Provenance string   `json:"provenance"`
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind,omitempty"`
+	Title           string   `json:"title"`
+	Status          string   `json:"status"`
+	Priority        string   `json:"priority"`
+	Lane            string   `json:"lane,omitempty"`
+	Owner           string   `json:"owner"`
+	Summary         string   `json:"summary"`
+	NextAction      string   `json:"next_action"`
+	ParentProjectID string   `json:"parent_project_id,omitempty"`
+	SourceRefs      []string `json:"source_refs,omitempty"`
+	Updated         string   `json:"updated,omitempty"`
+	SourcePath      string   `json:"source_path"`
+	Provenance      string   `json:"provenance"`
+	responseRefs    []string
+	labels          []string
+}
+
+type commandRoomProjectControl struct {
+	ID              string                          `json:"id"`
+	Kind            string                          `json:"kind,omitempty"`
+	Title           string                          `json:"title"`
+	Status          string                          `json:"status"`
+	Priority        string                          `json:"priority"`
+	Lane            string                          `json:"lane,omitempty"`
+	Owner           string                          `json:"owner"`
+	Summary         string                          `json:"summary"`
+	NextAction      string                          `json:"next_action"`
+	ParentProjectID string                          `json:"parent_project_id,omitempty"`
+	ParentProject   *commandRoomDevelopmentWorkItem `json:"parent_project,omitempty"`
+	SourceRefs      []string                        `json:"source_refs,omitempty"`
+	Notices         []commandRoomDevelopmentNotice  `json:"notices"`
+	ResponsePackets []commandRoomArtifactRef        `json:"response_packets"`
+	Reports         []commandRoomArtifactRef        `json:"reports"`
+	RouteBoundary   string                          `json:"route_boundary"`
+	SourcePath      string                          `json:"source_path"`
+	Provenance      string                          `json:"provenance"`
+}
+
+type commandRoomArtifactRef struct {
+	Path       string `json:"path"`
+	Title      string `json:"title,omitempty"`
+	ModifiedAt string `json:"modified_at,omitempty"`
+	Provenance string `json:"provenance"`
 }
 
 type commandRoomRuntimeSmoke struct {
@@ -148,7 +181,8 @@ func readCommandRoomDevelopmentMesh(root string) *commandRoomDevelopment {
 	dev.Assignments = readCommandRoomDevelopmentAssignments(root)
 	dev.WorkItems = readCommandRoomDevelopmentWorkItems(root)
 	dev.RuntimeSmokes = readCommandRoomRuntimeSmokes(root)
-	if len(dev.Assignments) == 0 && len(dev.WorkItems) == 0 && len(dev.RuntimeSmokes) == 0 {
+	dev.ProjectControls = readCommandRoomProjectControls(root)
+	if len(dev.Assignments) == 0 && len(dev.WorkItems) == 0 && len(dev.RuntimeSmokes) == 0 && len(dev.ProjectControls) == 0 {
 		dev.Status = "available-empty"
 	}
 	return dev
@@ -257,21 +291,7 @@ func readCommandRoomDevelopmentWorkItems(root string) []commandRoomDevelopmentWo
 		if kind != "" && kind != "pr" && kind != "project" && !strings.Contains(strings.ToLower(match), "live-router") {
 			continue
 		}
-		items = append(items, commandRoomDevelopmentWorkItem{
-			ID:         commandRoomAnyString(raw["id"]),
-			Kind:       kind,
-			Title:      commandRoomAnyString(raw["title"]),
-			Status:     commandRoomAnyString(raw["status"]),
-			Priority:   commandRoomAnyString(raw["priority"]),
-			Lane:       commandRoomAnyString(raw["lane"]),
-			Owner:      firstNonEmpty(commandRoomAnyString(raw["current_owner"]), commandRoomNestedString(raw, "active_claim", "agent"), commandRoomAnyString(raw["owner"])),
-			Summary:    commandRoomAnyString(raw["summary"]),
-			NextAction: commandRoomAnyString(raw["next_action"]),
-			SourceRefs: commandRoomStringSlice(raw["source_refs"]),
-			Updated:    commandRoomAnyString(raw["updated"]),
-			SourcePath: match,
-			Provenance: "durable mesh state",
-		})
+		items = append(items, commandRoomWorkItemFromRaw(match, raw))
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Priority == items[j].Priority {
@@ -280,6 +300,257 @@ func readCommandRoomDevelopmentWorkItems(root string) []commandRoomDevelopmentWo
 		return items[i].Priority > items[j].Priority
 	})
 	return items
+}
+
+func readCommandRoomProjectControls(root string) []commandRoomProjectControl {
+	workItems := readAllCommandRoomDevelopmentWorkItems(root)
+	if len(workItems) == 0 {
+		return nil
+	}
+	byID := map[string]commandRoomDevelopmentWorkItem{}
+	for _, item := range workItems {
+		byID[item.ID] = item
+	}
+	notices := readAllCommandRoomDevelopmentNotices(root)
+	var controls []commandRoomProjectControl
+	for _, item := range workItems {
+		if !commandRoomIsEyrieControlItem(item) || item.Kind == "project" {
+			continue
+		}
+		control := commandRoomProjectControl{
+			ID:              item.ID,
+			Kind:            item.Kind,
+			Title:           item.Title,
+			Status:          item.Status,
+			Priority:        item.Priority,
+			Lane:            item.Lane,
+			Owner:           item.Owner,
+			Summary:         item.Summary,
+			NextAction:      item.NextAction,
+			ParentProjectID: item.ParentProjectID,
+			SourceRefs:      item.SourceRefs,
+			SourcePath:      item.SourcePath,
+			Provenance:      "durable mesh state",
+			RouteBoundary:   "Read-only surface: route proposals through Rowan/Development and Magnus/Eyrie; do not mutate mesh files, runtimes, GitHub, commits, pushes, or public state from this view.",
+		}
+		if parent, ok := byID[item.ParentProjectID]; ok {
+			parentCopy := parent
+			control.ParentProject = &parentCopy
+			control.SourceRefs = uniqueNonEmpty(append(control.SourceRefs, parent.SourceRefs...))
+			control.ResponsePackets = append(control.ResponsePackets, commandRoomArtifactsFromPaths(parent.responseRefs, "response packet")...)
+		}
+		terms := commandRoomControlTerms(item, control.ParentProject)
+		for _, notice := range notices {
+			if commandRoomTextMatchesAny(commandRoomNoticeSearchText(notice), terms) {
+				control.Notices = append(control.Notices, notice)
+				control.ResponsePackets = append(control.ResponsePackets, commandRoomArtifactsFromPaths([]string{notice.ResponsePath}, "response packet")...)
+			}
+		}
+		control.ResponsePackets = append(control.ResponsePackets, commandRoomArtifactsFromPaths(item.responseRefs, "response packet")...)
+		control.Reports = commandRoomReportArtifacts(control.SourceRefs)
+		control.ResponsePackets = commandRoomUniqueArtifacts(control.ResponsePackets)
+		control.Reports = commandRoomUniqueArtifacts(control.Reports)
+		if control.Notices == nil {
+			control.Notices = []commandRoomDevelopmentNotice{}
+		}
+		if control.ResponsePackets == nil {
+			control.ResponsePackets = []commandRoomArtifactRef{}
+		}
+		if control.Reports == nil {
+			control.Reports = []commandRoomArtifactRef{}
+		}
+		sort.Slice(control.Notices, func(i, j int) bool {
+			if control.Notices[i].Priority == control.Notices[j].Priority {
+				return control.Notices[i].ID < control.Notices[j].ID
+			}
+			return control.Notices[i].Priority > control.Notices[j].Priority
+		})
+		controls = append(controls, control)
+	}
+	sort.Slice(controls, func(i, j int) bool {
+		if controls[i].Priority == controls[j].Priority {
+			return controls[i].ID < controls[j].ID
+		}
+		return controls[i].Priority > controls[j].Priority
+	})
+	return controls
+}
+
+func readAllCommandRoomDevelopmentWorkItems(root string) []commandRoomDevelopmentWorkItem {
+	matches, err := filepath.Glob(filepath.Join(root, "work-items", "*.yaml"))
+	if err != nil {
+		return nil
+	}
+	items := make([]commandRoomDevelopmentWorkItem, 0, len(matches))
+	for _, match := range matches {
+		var raw map[string]any
+		if err := readYAMLFile(match, &raw); err != nil {
+			continue
+		}
+		items = append(items, commandRoomWorkItemFromRaw(match, raw))
+	}
+	return items
+}
+
+func commandRoomWorkItemFromRaw(path string, raw map[string]any) commandRoomDevelopmentWorkItem {
+	return commandRoomDevelopmentWorkItem{
+		ID:              commandRoomAnyString(raw["id"]),
+		Kind:            commandRoomAnyString(raw["kind"]),
+		Title:           commandRoomAnyString(raw["title"]),
+		Status:          commandRoomAnyString(raw["status"]),
+		Priority:        commandRoomAnyString(raw["priority"]),
+		Lane:            commandRoomAnyString(raw["lane"]),
+		Owner:           firstNonEmpty(commandRoomAnyString(raw["current_owner"]), commandRoomNestedString(raw, "active_claim", "agent"), commandRoomAnyString(raw["owner"])),
+		Summary:         commandRoomAnyString(raw["summary"]),
+		NextAction:      commandRoomAnyString(raw["next_action"]),
+		ParentProjectID: commandRoomAnyString(raw["parent_project"]),
+		SourceRefs:      commandRoomStringSlice(raw["source_refs"]),
+		Updated:         commandRoomAnyString(raw["updated"]),
+		SourcePath:      path,
+		Provenance:      "durable mesh state",
+		responseRefs:    commandRoomWorkedByEvidence(raw["worked_by"]),
+		labels:          commandRoomStringSlice(raw["labels"]),
+	}
+}
+
+func commandRoomWorkedByEvidence(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	var refs []string
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if evidence := commandRoomAnyString(entry["evidence"]); evidence != "" {
+			refs = append(refs, evidence)
+		}
+	}
+	return refs
+}
+
+func readAllCommandRoomDevelopmentNotices(root string) []commandRoomDevelopmentNotice {
+	matches, err := filepath.Glob(filepath.Join(root, "inboxes", "*.yaml"))
+	if err != nil {
+		return nil
+	}
+	var notices []commandRoomDevelopmentNotice
+	for _, match := range matches {
+		var file commandRoomDevelopmentInboxFile
+		if err := readYAMLFile(match, &file); err != nil {
+			continue
+		}
+		for _, notice := range file.Notices {
+			notices = append(notices, notice.toCommandRoomDevelopmentNotice(match))
+		}
+	}
+	return notices
+}
+
+func commandRoomIsEyrieControlItem(item commandRoomDevelopmentWorkItem) bool {
+	return item.ID == "task-eyrie-paperclip-control-surface" ||
+		item.ParentProjectID == "eyrie-zeroclaw-gui-bridge"
+}
+
+func commandRoomControlTerms(item commandRoomDevelopmentWorkItem, parent *commandRoomDevelopmentWorkItem) []string {
+	terms := []string{item.ID, item.ParentProjectID}
+	for _, ref := range item.SourceRefs {
+		terms = append(terms, ref, filepath.Base(ref))
+	}
+	if parent != nil {
+		terms = append(terms, parent.ID)
+		for _, ref := range parent.SourceRefs {
+			terms = append(terms, ref, filepath.Base(ref))
+		}
+	}
+	return uniqueNonEmpty(terms)
+}
+
+func commandRoomNoticeSearchText(notice commandRoomDevelopmentNotice) string {
+	return strings.Join(append([]string{
+		notice.ID,
+		notice.Title,
+		notice.Status,
+		notice.Priority,
+		notice.From,
+		notice.Owner,
+		notice.Worker,
+		notice.Summary,
+		notice.Request,
+		notice.ResponsePath,
+		notice.ApprovalBoundary,
+		notice.SourcePath,
+	}, notice.ContextRefs...), "\n")
+}
+
+func commandRoomTextMatchesAny(text string, terms []string) bool {
+	lower := strings.ToLower(text)
+	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term != "" && strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandRoomArtifactsFromPaths(paths []string, provenance string) []commandRoomArtifactRef {
+	var artifacts []commandRoomArtifactRef
+	for _, path := range uniqueNonEmpty(paths) {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		artifact := commandRoomArtifactRef{
+			Path:       path,
+			Title:      filepath.Base(path),
+			Provenance: provenance,
+		}
+		if info, err := os.Stat(path); err == nil {
+			artifact.ModifiedAt = info.ModTime().UTC().Format(time.RFC3339)
+		}
+		if strings.EqualFold(filepath.Ext(path), ".md") && fileExists(path) {
+			if title, err := readMarkdownTitle(path); err == nil {
+				artifact.Title = title
+			}
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts
+}
+
+func commandRoomReportArtifacts(paths []string) []commandRoomArtifactRef {
+	var reports []commandRoomArtifactRef
+	for _, path := range paths {
+		if !strings.Contains(path, "/reports/") && !strings.Contains(path, "\\reports\\") {
+			continue
+		}
+		reports = append(reports, commandRoomArtifactsFromPaths([]string{path}, "report artifact")...)
+	}
+	return reports
+}
+
+func commandRoomUniqueArtifacts(items []commandRoomArtifactRef) []commandRoomArtifactRef {
+	seen := map[string]struct{}{}
+	var out []commandRoomArtifactRef
+	for _, item := range items {
+		if strings.TrimSpace(item.Path) == "" {
+			continue
+		}
+		if _, ok := seen[item.Path]; ok {
+			continue
+		}
+		seen[item.Path] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ModifiedAt == out[j].ModifiedAt {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].ModifiedAt > out[j].ModifiedAt
+	})
+	return out
 }
 
 func readCommandRoomRuntimeSmokes(root string) []commandRoomRuntimeSmoke {

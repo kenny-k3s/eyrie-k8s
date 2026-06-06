@@ -438,6 +438,7 @@ export interface CommandRoomDevelopment {
   assignments: CommandRoomDevelopmentNotice[];
   work_items: CommandRoomDevelopmentWorkItem[];
   runtime_smokes: CommandRoomRuntimeSmoke[];
+  project_controls: CommandRoomProjectControl[];
 }
 
 export interface CommandRoomDevelopmentNotice {
@@ -467,8 +468,37 @@ export interface CommandRoomDevelopmentWorkItem {
   owner: string;
   summary: string;
   next_action: string;
+  parent_project_id?: string;
   source_refs?: string[];
   updated?: string;
+  source_path: string;
+  provenance: string;
+}
+
+export interface CommandRoomArtifactRef {
+  path: string;
+  title?: string;
+  modified_at?: string;
+  provenance: string;
+}
+
+export interface CommandRoomProjectControl {
+  id: string;
+  kind?: string;
+  title: string;
+  status: string;
+  priority: string;
+  lane?: string;
+  owner: string;
+  summary: string;
+  next_action: string;
+  parent_project_id?: string;
+  parent_project?: CommandRoomDevelopmentWorkItem;
+  source_refs?: string[];
+  notices: CommandRoomDevelopmentNotice[];
+  response_packets: CommandRoomArtifactRef[];
+  reports: CommandRoomArtifactRef[];
+  route_boundary: string;
   source_path: string;
   provenance: string;
 }
