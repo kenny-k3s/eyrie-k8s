@@ -1,6 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentInfo, Project, AgentInstance, CommanderInfo } from "./types";
-import { fetchAgents, fetchProjects, fetchInstances, fetchCommander, fetchDevBackendStatus } from "./api";
+import type { AgentInfo, Project, AgentInstance, CommanderInfo, FluxSyncStatus } from "./types";
+import { fetchAgents, fetchProjects, fetchInstances, fetchCommander, fetchDevBackendStatus, fetchFluxStatus } from "./api";
 import { cleanDisplayName } from "./format";
 
 interface DataContextValue {
@@ -8,6 +8,7 @@ interface DataContextValue {
   projects: Project[];
   instances: AgentInstance[];
   commander: CommanderInfo | null;
+  fluxStatus: FluxSyncStatus | null;
   loading: boolean;
   error: string | null;
   /** True when all API fetches failed — backend is likely down or restarting. */
@@ -62,6 +63,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [commander, setCommander] = useState<CommanderInfo | null>(null);
+  const [fluxStatus, setFluxStatus] = useState<FluxSyncStatus | null>(null);
   const [loading, setLoading] = useState(() => !readBackendPollingPaused());
   const [error, setError] = useState<string | null>(null);
   const [backendDown, setBackendDown] = useState(readBackendPollingPaused);
@@ -138,11 +140,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setError(null);
       const errors: string[] = [];
 
-      const [agentResult, projectResult, instanceResult, commanderResult] = await Promise.allSettled([
+      const [agentResult, projectResult, instanceResult, commanderResult, fluxResult] = await Promise.allSettled([
         fetchAgents(),
         fetchProjects(),
         fetchInstances(),
         fetchCommander(),
+        fetchFluxStatus(),
       ]);
 
       // WHY JSON comparison: Without this, every 30s poll calls setState with
@@ -173,6 +176,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (commanderResult.status === "fulfilled") {
         const val = commanderResult.value ?? null;
         setCommander((prev) => JSON.stringify(prev) === JSON.stringify(val) ? prev : val);
+      }
+
+      if (fluxResult.status === "fulfilled") {
+        const val = fluxResult.value ?? null;
+        setFluxStatus((prev) => JSON.stringify(prev) === JSON.stringify(val) ? prev : val);
       }
       // Commander fetch failure is not counted as an error — it's optional
       // (no commander set up yet is a valid state)
@@ -295,7 +303,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [refresh, backendPollingPaused]);
 
   return (
-    <DataContext.Provider value={{ agents, projects, instances, commander, loading, error, backendDown, backendStarting, setBackendStarting: applyBackendStarting, backendPollingPaused, pauseBackendPolling, resumeBackendPolling, refresh, pendingActions, setPendingAction }}>
+    <DataContext.Provider value={{ agents, projects, instances, commander, fluxStatus, loading, error, backendDown, backendStarting, setBackendStarting: applyBackendStarting, backendPollingPaused, pauseBackendPolling, resumeBackendPolling, refresh, pendingActions, setPendingAction }}>
       {children}
     </DataContext.Provider>
   );

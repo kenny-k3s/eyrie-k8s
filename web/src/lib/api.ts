@@ -27,6 +27,7 @@ import type {
   CommandRoom,
   CommandRoomBoardItem,
   MemoryEntry,
+  FluxSyncStatus,
 } from "./types";
 
 const BASE = "";
@@ -80,6 +81,12 @@ async function throwIfNotOk(res: Response, fallbackMsg: string): Promise<void> {
 export async function fetchAgents(): Promise<AgentInfo[]> {
   const res = await fetchWithTimeout(`${BASE}/api/agents`);
   if (!res.ok) throw new Error(`Failed to fetch agents: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchFluxStatus(): Promise<FluxSyncStatus> {
+  const res = await fetchWithTimeout(`${BASE}/api/flux/status`);
+  if (!res.ok) throw new Error(`Failed to fetch Flux status: ${res.statusText}`);
   return res.json();
 }
 

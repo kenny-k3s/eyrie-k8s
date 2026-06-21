@@ -15,6 +15,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/k8s"
 	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/registry"
 )
@@ -37,6 +38,12 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 
 	result := s.runDiscovery(ctx)
 	agents := make([]agentJSON, 0, len(result.Agents))
+
+	k8sClient, k8sErr := k8s.NewClient()
+	var k8sMgr k8s.Manager
+	if k8sErr == nil {
+		k8sMgr = k8s.NewManager(k8sClient)
+	}
 
 	for _, ar := range result.Agents {
 		aj := agentJSON{
@@ -79,6 +86,29 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			}
 			status.InferBusyState()
 			aj.Status = status
+		}
+
+		// Enrich health metrics and lifecycle states from Kubernetes manager if available
+		if k8sMgr != nil {
+			if kStatus, err := k8sMgr.Status(ctx, ar.Agent.Name); err == nil {
+				aj.Alive = (kStatus.PodPhase == "Running")
+				if aj.Health == nil {
+					aj.Health = &adapter.HealthStatus{}
+				}
+				aj.Health.Alive = aj.Alive
+				aj.Health.Uptime = kStatus.Uptime
+				aj.Health.CPU = kStatus.CPUUsageCores * 100
+				aj.Health.RAM = uint64(kStatus.MemoryUsageBytes)
+
+				if aj.Health.Components == nil {
+					aj.Health.Components = make(map[string]adapter.ComponentHealth)
+				}
+				aj.Health.Components["pod"] = adapter.ComponentHealth{
+					Status:       strings.ToLower(kStatus.PodPhase),
+					RestartCount: kStatus.RestartCount,
+					LastError:    kStatus.Message,
+				}
+			}
 		}
 
 		agents = append(agents, aj)
