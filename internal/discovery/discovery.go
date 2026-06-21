@@ -13,6 +13,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/k8s"
 )
 
 // WHY package-level singleton: Embedded adapters are stateful (they hold
@@ -40,13 +41,38 @@ type AgentResult struct {
 // Stored tokens from ~/.eyrie/tokens.json are applied automatically.
 func Run(ctx context.Context, cfg config.Config) Result {
 	var result Result
+	var discovered []adapter.DiscoveredAgent
 
-	// Stage 1: Scan config files (legacy agents from standard paths)
-	discovered := scanConfigFiles(cfg.Discovery.ConfigPaths)
+	// Stage 1: Try Kubernetes label-based discovery first
+	k8sClient, err := k8s.NewClient()
+	if err == nil {
+		mgr := k8s.NewManager(k8sClient)
+		workloads, err := mgr.Discover(ctx)
+		if err == nil {
+			slog.Info("Discovered agents from Kubernetes", "count", len(workloads))
+			for _, w := range workloads {
+				port := getFrameworkDefaultPort(w.Framework)
+				discovered = append(discovered, adapter.DiscoveredAgent{
+					Name:        w.Name,
+					DisplayName: w.Name,
+					Framework:   w.Framework,
+					Host:        w.Name, // Service DNS resolves to w.Name in same namespace
+					Port:        port,
+					ConfigPath:  w.ConfigPath,
+				})
+			}
+		} else {
+			slog.Warn("Kubernetes discovery failed, falling back to configuration scanning", "err", err)
+		}
+	} else {
+		slog.Debug("Kubernetes client initialization skipped/failed, using local discovery", "err", err)
+	}
 
-	// Stage 1b: Scan provisioned instances from ~/.eyrie/instances/
-	// Embedded instances are handled inline (no config file scanning needed).
-	discovered = append(discovered, scanInstances()...)
+	// Fallback to config files scanning if no K8s agents found
+	if len(discovered) == 0 {
+		discovered = scanConfigFiles(cfg.Discovery.ConfigPaths)
+		discovered = append(discovered, scanInstances()...)
+	}
 
 	// Include manually configured agents
 	for _, m := range cfg.Agents {
@@ -123,6 +149,19 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 
 	return result
+}
+
+func getFrameworkDefaultPort(fw string) int {
+	switch fw {
+	case "zeroclaw":
+		return 3000
+	case "openclaw":
+		return 8080
+	case "hermes":
+		return 8642
+	default:
+		return 3000
+	}
 }
 
 // scanInstances reads all provisioned instances from ~/.eyrie/instances/
