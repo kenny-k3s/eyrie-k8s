@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/k8s"
 )
 
 type LifecycleAction string
@@ -25,8 +26,94 @@ const (
 )
 
 // Execute runs a lifecycle action for the given framework.
-// It checks whether the OS service is installed first and adapts the command accordingly.
 func Execute(ctx context.Context, framework string, action LifecycleAction) error {
+	k8sClient, err := k8s.NewClient()
+	if err == nil {
+		mgr := k8s.NewManager(k8sClient)
+		workloads, err := mgr.Discover(ctx)
+		if err == nil && len(workloads) > 0 {
+			// Find workload by framework
+			var target string
+			for _, w := range workloads {
+				if w.Framework == framework {
+					target = w.Name
+					break
+				}
+			}
+			if target != "" {
+				return runK8sAction(ctx, mgr, target, action)
+			}
+		}
+	}
+
+	// Fallback to legacy local execution
+	return executeLegacy(ctx, framework, action)
+}
+
+// ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
+func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
+	return ExecuteWithConfigEnv(ctx, framework, configPath, action, nil)
+}
+
+// ExecuteWithConfigEnv runs a lifecycle action for a framework using a specific config path and environment.
+func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
+	k8sClient, err := k8s.NewClient()
+	if err == nil {
+		mgr := k8s.NewManager(k8sClient)
+		workloads, err := mgr.Discover(ctx)
+		if err == nil && len(workloads) > 0 {
+			var target string
+			// 1. Try exact config path match
+			for _, w := range workloads {
+				if w.ConfigPath == configPath {
+					target = w.Name
+					break
+				}
+			}
+			// 2. Try matching workload name in config path
+			if target == "" {
+				for _, w := range workloads {
+					if strings.Contains(configPath, w.Name) {
+						target = w.Name
+						break
+					}
+				}
+			}
+			// 3. Fallback to first workload of this framework
+			if target == "" {
+				for _, w := range workloads {
+					if w.Framework == framework {
+						target = w.Name
+						break
+					}
+				}
+			}
+			if target != "" {
+				return runK8sAction(ctx, mgr, target, action)
+			}
+		}
+	}
+
+	// Fallback to legacy local execution
+	return executeLegacyWithConfigEnv(ctx, framework, configPath, action, extraEnv)
+}
+
+func runK8sAction(ctx context.Context, mgr k8s.Manager, target string, action LifecycleAction) error {
+	switch action {
+	case ActionStart:
+		return mgr.Start(ctx, target)
+	case ActionStop:
+		return mgr.Stop(ctx, target)
+	case ActionRestart:
+		return mgr.Restart(ctx, target)
+	default:
+		return fmt.Errorf("unknown action %q for Kubernetes workload %q", action, target)
+	}
+}
+
+// Legacy Local Execution Logic Below
+
+func executeLegacy(ctx context.Context, framework string, action LifecycleAction) error {
 	switch framework {
 	case "zeroclaw":
 		return executeZeroClaw(ctx, action)
@@ -37,12 +124,8 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 	case "picoclaw":
 		return executePicoClaw(ctx, action)
 	case "embedded":
-		// Embedded agents run in-process as goroutines — lifecycle is managed
-		// by the adapter, not by external CLI commands. This is a no-op.
 		return nil
 	case "codex":
-		// Codex App Server is launched per turn by the adapter; there is no
-		// persistent framework daemon for the manager to start.
 		return nil
 	default:
 		return fmt.Errorf("unknown framework %q: cannot determine lifecycle command", framework)
@@ -51,25 +134,20 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 
 func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 	if action == ActionStart || action == ActionRestart {
-		// Check if the launchd service is installed
 		if serviceInstalled(ctx, "zeroclaw") {
 			return run(ctx, "zeroclaw", "service", string(action))
 		}
-		// Service not installed -- install it first, then start
 		if err := run(ctx, "zeroclaw", "service", "install"); err != nil {
 			return fmt.Errorf("service not installed and auto-install failed: %w\nYou can also start manually with: zeroclaw daemon", err)
 		}
 		return run(ctx, "zeroclaw", "service", string(action))
 	}
-	// Stop: try service stop first, then always pkill to catch manually started daemons
 	svcErr := run(ctx, "zeroclaw", "service", string(action))
 	killCmd := exec.CommandContext(ctx, "pkill", "-f", "zeroclaw daemon")
 	killErr := killCmd.Run()
-	// Return nil if either succeeded; only fail if both failed
 	if svcErr != nil && killErr != nil {
-		// pkill exit code 1 means "no processes matched" — that's OK
 		if exitErr, ok := killErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return svcErr // no processes to kill; report the service error
+			return svcErr
 		}
 		return fmt.Errorf("service stop: %v; pkill: %v", svcErr, killErr)
 	}
@@ -101,15 +179,11 @@ func stopOpenClawGateway(ctx context.Context) error {
 		return nil
 	}
 	if exitErr, ok := killErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		// No matching foreground gateway is already the requested stopped state.
 		return nil
 	}
 	return fmt.Errorf("service stop: %v; pkill: %v", svcErr, killErr)
 }
 
-// node22BinDir finds the nvm-managed Node.js v22 bin directory.
-// OpenClaw requires Node 22 — newer versions crash on older macOS due to
-// missing libc++ symbols. Returns "" if no v22 installation is found.
 func node22BinDir() string {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -120,7 +194,6 @@ func node22BinDir() string {
 	if err != nil {
 		return ""
 	}
-	// Collect all v22.x.x directories and pick the latest
 	var v22Dirs []string
 	for _, e := range entries {
 		if e.IsDir() && strings.HasPrefix(e.Name(), "v22.") {
@@ -130,16 +203,12 @@ func node22BinDir() string {
 	if len(v22Dirs) == 0 {
 		return ""
 	}
-	// Sort by semantic version (numeric comparison) instead of lexicographic
-	// to avoid issues like v22.2.0 sorting after v22.10.0.
 	sort.Slice(v22Dirs, func(i, j int) bool {
 		return compareNodeVersions(v22Dirs[i], v22Dirs[j]) < 0
 	})
 	return filepath.Join(nvmDir, v22Dirs[len(v22Dirs)-1], "bin")
 }
 
-// compareNodeVersions compares two Node.js version directory names (e.g. "v22.2.0", "v22.10.1")
-// by their numeric components. Returns negative if a < b, 0 if equal, positive if a > b.
 func compareNodeVersions(a, b string) int {
 	partsA := strings.Split(strings.TrimPrefix(a, "v"), ".")
 	partsB := strings.Split(strings.TrimPrefix(b, "v"), ".")
@@ -162,8 +231,6 @@ func compareNodeVersions(a, b string) int {
 	return 0
 }
 
-// node22Env returns config.EnrichedEnv() with Node 22 prepended to PATH,
-// or nil if no v22 installation is found.
 func node22Env() []string {
 	binDir := node22BinDir()
 	if binDir == "" {
@@ -179,8 +246,6 @@ func node22Env() []string {
 	return env
 }
 
-// runWithNode22 runs a command with Node.js v22 at the front of PATH.
-// Falls back to the default PATH if no v22 installation is found.
 func runWithNode22(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, config.LookPathEnriched(command), args...)
 	if env := node22Env(); env != nil {
@@ -196,7 +261,6 @@ func runWithNode22(ctx context.Context, command string, args ...string) error {
 func executeHermes(ctx context.Context, action LifecycleAction) error {
 	switch action {
 	case ActionStart:
-		// Check if launchd service is installed, install if needed
 		if !hermesServiceInstalled(ctx) {
 			if err := run(ctx, "hermes", "gateway", "install"); err != nil {
 				return fmt.Errorf("failed to install hermes service: %w", err)
@@ -215,8 +279,6 @@ func executeHermes(ctx context.Context, action LifecycleAction) error {
 func executePicoClaw(ctx context.Context, action LifecycleAction) error {
 	switch action {
 	case ActionStart:
-		// Run as a detached daemon so the manager doesn't block.
-		// Matches ExecuteWithConfig's behaviour for provisioned instances.
 		return runDetached(ctx, "", "picoclaw", "gateway")
 	case ActionStop:
 		return run(ctx, "picoclaw", "gateway", "stop")
@@ -228,7 +290,6 @@ func executePicoClaw(ctx context.Context, action LifecycleAction) error {
 	}
 }
 
-// hermesServiceInstalled checks if the Hermes launchd service is installed
 func hermesServiceInstalled(ctx context.Context) bool {
 	home := os.Getenv("HOME")
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", "ai.hermes.gateway.plist")
@@ -245,7 +306,6 @@ func serviceInstalled(ctx context.Context, framework string) bool {
 		if err != nil {
 			return false
 		}
-		// If the output contains "not loaded" or "not installed", the service isn't set up
 		s := string(out)
 		return !strings.Contains(s, "not loaded") && !strings.Contains(s, "not installed")
 	default:
@@ -263,20 +323,14 @@ func run(ctx context.Context, command string, args ...string) error {
 	return nil
 }
 
-// runDetachedWithNode22 is like runDetached but prepends Node.js v22 to PATH.
 func runDetachedWithNode22(ctx context.Context, logDir string, command string, args ...string) error {
 	return runDetachedWithEnv(ctx, logDir, node22Env(), command, args...)
 }
 
-// runDetached starts a process in the background (for daemons that don't exit).
-// If logDir is non-empty, stdout and stderr are redirected to {logDir}/daemon.stdout.log.
-// Returns once the process has started successfully.
 func runDetached(ctx context.Context, logDir string, command string, args ...string) error {
 	return runDetachedWithEnv(ctx, logDir, nil, command, args...)
 }
 
-// runDetachedWithEnv starts a detached daemon process. The context parameter is
-// intentionally unused because the process must outlive the caller's context.
 func runDetachedWithEnv(_ context.Context, logDir string, env []string, command string, args ...string) error {
 	cmd := exec.Command(config.LookPathEnriched(command), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -309,7 +363,6 @@ func runDetachedWithEnv(_ context.Context, logDir string, env []string, command 
 		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
 	}
 
-	// Reap the process in the background and close the log file when done
 	go func() {
 		_ = cmd.Wait()
 		if logFile != nil {
@@ -319,15 +372,10 @@ func runDetachedWithEnv(_ context.Context, logDir string, env []string, command 
 	return nil
 }
 
-// killByConfigDir finds and kills all processes that were started with --config-dir pointing
-// to the given directory. This is more reliable than "zeroclaw service stop" for processes
-// started via runDetached (which don't register with launchd/systemd).
 func killByConfigDir(configDir string) (found bool, err error) {
-	// Escape regex metacharacters in configDir to avoid injection
 	escaped := regexp.QuoteMeta(configDir)
 	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s([[:space:]]|$)", escaped))
 	if err := cmd.Run(); err != nil {
-		// pkill exit code 1 means "no processes matched" — not an error
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return false, nil
 		}
@@ -336,8 +384,6 @@ func killByConfigDir(configDir string) (found bool, err error) {
 	return true, nil
 }
 
-// processExistsByConfigDir checks if any processes match the config-dir pattern
-// without sending a signal. Used in restart loops to wait for process exit.
 func processExistsByConfigDir(configDir string) (bool, error) {
 	escaped := regexp.QuoteMeta(configDir)
 	cmd := exec.Command("pgrep", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s([[:space:]]|$)", escaped))
@@ -350,13 +396,7 @@ func processExistsByConfigDir(configDir string) (bool, error) {
 	return true, nil
 }
 
-// ExecuteWithConfigEnv runs a lifecycle action for a framework using a specific
-// config path, with extra environment variables appended. Starts from
-// config.EnrichedEnv() (which itself extends os.Environ() with tool-directory
-// PATH entries for cargo/go/npm/etc) via mergeEnv, then appends extraEnv —
-// never replaces the full environment. This is the primary entry point when
-// vault env vars need injection.
-func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
+func executeLegacyWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
 	switch framework {
 	case "zeroclaw":
 		configDir := filepath.Dir(configPath)
@@ -435,8 +475,6 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 	}
 }
 
-// mergeEnv starts from config.EnrichedEnv() and appends extra env vars. If extraEnv
-// is nil or empty, returns config.EnrichedEnv() unchanged.
 func mergeEnv(extraEnv []string) []string {
 	env := config.EnrichedEnv()
 	if len(extraEnv) == 0 {
@@ -445,18 +483,14 @@ func mergeEnv(extraEnv []string) []string {
 	return append(env, extraEnv...)
 }
 
-// ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
-// This is used for provisioned instances that have their own config files.
-func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
+func executeLegacyWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
 	switch framework {
 	case "zeroclaw":
-		// ZeroClaw uses --config-dir (directory), not --config (file).
-		// configPath points to the config file; we pass its parent directory.
 		configDir := filepath.Dir(configPath)
 		logDir := filepath.Join(configDir, "logs")
 		switch action {
 		case ActionStart:
-			_, _ = killByConfigDir(configDir) // Clean up any stale process first
+			_, _ = killByConfigDir(configDir)
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		case ActionStop:
 			_, err := killByConfigDir(configDir)
@@ -465,7 +499,6 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			if _, stopErr := killByConfigDir(configDir); stopErr != nil {
 				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw stop (config-dir %s): %v\n", configDir, stopErr)
 			}
-			// Wait for old process to exit before starting a new one
 			for i := 0; i < 10; i++ {
 				time.Sleep(100 * time.Millisecond)
 				found, err := processExistsByConfigDir(configDir)
@@ -473,7 +506,6 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 					break
 				}
 			}
-			// Verify the old process actually exited before spawning a new one
 			if still, _ := processExistsByConfigDir(configDir); still {
 				return fmt.Errorf("old process for config-dir %s still running after 1s — not starting duplicate", configDir)
 			}
@@ -517,8 +549,6 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			return fmt.Errorf("unknown action %q for picoclaw", action)
 		}
 	case "embedded":
-		// Embedded agents have no external process — lifecycle is managed
-		// by the adapter's Start/Stop/Restart methods directly.
 		return nil
 	case "codex":
 		return nil
@@ -527,7 +557,6 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 	}
 }
 
-// CommandString returns a human-readable version of the command that would run.
 func CommandString(framework string, action LifecycleAction) string {
 	switch framework {
 	case "zeroclaw":
