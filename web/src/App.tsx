@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, useParams, useNavigate, Link } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import { Play, Power, RefreshCw } from "lucide-react";
+import { Play, Power, RefreshCw, GitCommit, AlertTriangle, CheckCircle } from "lucide-react";
 import type { AgentInfo } from "./lib/types";
 import { formatUptime, formatBytes } from "./lib/format";
 import { fetchDevBackendStatus, startDevBackend, stopDevBackend } from "./lib/api";
@@ -245,6 +245,7 @@ function AppContent() {
             )}
           </div>
         )}
+        <FluxStatusBar />
         <div className="min-h-0 flex-1 overflow-hidden">
           <Routes>
             {/* Full-width routes (no padding/max-width) */}
@@ -465,4 +466,78 @@ function AgentDetailRoute() {
   }
 
   return <AgentDetail agent={agent} onRefresh={refresh} />;
+}
+
+function getCommitLink(revision?: string) {
+  if (!revision) return null;
+  const match = revision.match(/sha1:([a-f0-9]+)/);
+  if (match) {
+    const sha = match[1];
+    return {
+      sha: sha.substring(0, 7),
+      url: `https://github.com/kenny-k3s/ai_agents/commit/${sha}`
+    };
+  }
+  return null;
+}
+
+function formatSyncTime(timeStr?: string) {
+  if (!timeStr) return "-";
+  try {
+    const date = new Date(timeStr);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + " " + date.toLocaleDateString();
+  } catch {
+    return timeStr;
+  }
+}
+
+function FluxStatusBar() {
+  const { fluxStatus } = useData();
+
+  if (!fluxStatus || fluxStatus.sync_status === "Disabled") {
+    return null;
+  }
+
+  const commit = getCommitLink(fluxStatus.last_applied);
+  const isFailed = fluxStatus.sync_status === "Failed";
+  const isReconciling = fluxStatus.sync_status === "Reconciling";
+
+  let statusIcon = <CheckCircle className="h-3.5 w-3.5 text-green" />;
+  if (isFailed) {
+    statusIcon = <AlertTriangle className="h-3.5 w-3.5 text-red" />;
+  } else if (isReconciling) {
+    statusIcon = <RefreshCw className="h-3.5 w-3.5 text-yellow animate-spin" />;
+  }
+
+  return (
+    <div className="flex items-center justify-between border-b border-border bg-surface-hover/30 px-6 py-2 text-xs">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 font-medium">
+          {statusIcon}
+          <span>GitOps: {fluxStatus.sync_status}</span>
+        </div>
+        {commit && (
+          <div className="flex items-center gap-1 border-l border-border pl-3 text-text-muted">
+            <GitCommit className="h-3.5 w-3.5" />
+            <a
+              href={commit.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono hover:text-accent hover:underline"
+            >
+              {commit.sha}
+            </a>
+          </div>
+        )}
+        {fluxStatus.message && isFailed && (
+          <span className="truncate max-w-md text-red/80 border-l border-border pl-3" title={fluxStatus.message}>
+            {fluxStatus.message}
+          </span>
+        )}
+      </div>
+      <div className="text-text-muted">
+        synced {formatSyncTime(fluxStatus.last_sync_time)}
+      </div>
+    </div>
+  );
 }

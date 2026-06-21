@@ -16,6 +16,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/k8s"
 	"github.com/Audacity88/eyrie/internal/project"
 	"github.com/Audacity88/eyrie/internal/reviewops"
 )
@@ -129,6 +130,12 @@ func New(cfg config.Config) (*Server, error) {
 		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
 	}
+
+	// Automatically synchronize K8s-discovered agents with local stores.
+	if err := s.syncK8sAgents(); err != nil {
+		slog.Warn("Failed to sync K8s agents on startup", "error", err)
+	}
+
 	return s, nil
 }
 
@@ -208,6 +215,7 @@ func (s *Server) registerRoutes() {
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
+	s.mux.HandleFunc("GET /api/flux/status", s.handleFluxStatus)
 
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
@@ -334,4 +342,148 @@ func isLocalhostOrigin(origin string) bool {
 		}
 	}
 	return false
+}
+
+// syncK8sAgents discovers workloads on Kubernetes and automatically synchronizes them with the local Instance and Project stores.
+func (s *Server) syncK8sAgents() error {
+	k8sClient, err := k8s.NewClient()
+	if err != nil {
+		slog.Debug("Kubernetes client initialization skipped/failed, skipping sync", "error", err)
+		return nil
+	}
+
+	mgr := k8s.NewManager(k8sClient)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	workloads, err := mgr.Discover(ctx)
+	if err != nil {
+		slog.Warn("Failed to discover K8s workloads during startup sync", "error", err)
+		return nil
+	}
+
+	if len(workloads) == 0 {
+		slog.Debug("No K8s workloads discovered, skipping startup sync")
+		return nil
+	}
+
+	slog.Info("Synchronizing K8s-discovered agents with local stores", "count", len(workloads))
+
+	// Get existing projects
+	projects, err := s.projectStore.List()
+	if err != nil {
+		return fmt.Errorf("list projects: %w", err)
+	}
+
+	var targetProject *project.Project
+	isNewProject := false
+
+	if len(projects) == 0 {
+		// Programmatically create a default project named "Default Agent Fleet"
+		p, err := s.projectStore.Create(project.CreateRequest{
+			Name:        "Default Agent Fleet",
+			Description: "System-discovered agent fleet management hierarchy.",
+			Goal:        "Maintain and coordinate the K8s agent fleet.",
+			CreatedBy:   "system",
+		})
+		if err != nil {
+			return fmt.Errorf("create default project: %w", err)
+		}
+		targetProject = p
+		isNewProject = true
+		slog.Info("Created default project", "project_id", p.ID, "name", p.Name)
+	} else {
+		// Look for an existing project named "Default Agent Fleet"
+		for i := range projects {
+			if projects[i].Name == "Default Agent Fleet" {
+				targetProject = &projects[i]
+				break
+			}
+		}
+	}
+
+	var captainID string
+	var talonIDs []string
+
+	// Sync instances
+	for _, w := range workloads {
+		port := 3000
+		switch w.Framework {
+		case "zeroclaw":
+			port = 3000
+		case "openclaw":
+			port = 8080
+		case "hermes":
+			port = 8642
+		}
+
+		inst, err := s.instanceStore.Get(w.Name)
+		var existing instance.Instance
+		if err == nil && inst != nil {
+			existing = *inst
+		}
+
+		role := instance.RoleTalon
+		if w.Name == "zeroclaw-gateway" {
+			role = instance.RoleCaptain
+			captainID = w.Name
+		} else {
+			talonIDs = append(talonIDs, w.Name)
+		}
+
+		status := instance.StatusStarting
+		if w.Status == "Running" {
+			status = instance.StatusRunning
+		} else if w.Status == "Stopped" {
+			status = instance.StatusStopped
+		}
+
+		healthStatus := "unknown"
+		if w.Status == "Running" {
+			healthStatus = "healthy"
+		}
+
+		projectID := ""
+		if targetProject != nil {
+			projectID = targetProject.ID
+		}
+
+		createdAt := time.Now()
+		if !existing.CreatedAt.IsZero() {
+			createdAt = existing.CreatedAt
+		}
+
+		newInst := instance.Instance{
+			ID:              w.Name,
+			Name:            w.Name,
+			DisplayName:     w.Name,
+			Framework:       w.Framework,
+			HierarchyRole:   role,
+			ProjectID:       projectID,
+			Port:            port,
+			ConfigPath:      w.ConfigPath,
+			Status:          status,
+			StatusUpdatedAt: time.Now(),
+			HealthStatus:    healthStatus,
+			CreatedAt:       createdAt,
+			CreatedBy:       "system",
+		}
+
+		if err := s.instanceStore.Save(newInst); err != nil {
+			slog.Warn("Failed to save synced instance", "name", w.Name, "error", err)
+		}
+	}
+
+	// Update project orchestrator and role agents if we created a new project, or if we want to sync them
+	if targetProject != nil && (isNewProject || targetProject.OrchestratorID == "") {
+		targetProject.OrchestratorID = captainID
+		targetProject.RoleAgentIDs = talonIDs
+		if err := s.projectStore.Save(*targetProject); err != nil {
+			slog.Warn("Failed to save updated project", "project_id", targetProject.ID, "error", err)
+		} else {
+			slog.Info("Mapped project hierarchy", "captain", captainID, "talons", talonIDs)
+		}
+	}
+
+	return nil
 }

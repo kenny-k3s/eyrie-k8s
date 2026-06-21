@@ -613,3 +613,12 @@ export const FRAMEWORK_EMOJI: Record<string, string> = {
   picoclaw: "🎯",
   embedded: "⚡",
 };
+
+export interface FluxSyncStatus {
+  name: string;
+  sync_status: string;
+  last_applied: string;
+  last_sync_time: string;
+  message?: string;
+}
+
