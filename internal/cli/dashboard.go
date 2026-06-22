@@ -26,8 +26,13 @@ var dashboardCmd = &cobra.Command{
 	RunE:  runDashboard,
 }
 
+var dashboardHost string
+var dashboardPort int
+
 func init() {
 	dashboardCmd.Flags().BoolVar(&dashboardNoOpen, "no-open", false, "Don't open the browser automatically")
+	dashboardCmd.Flags().StringVar(&dashboardHost, "host", "", "Host address to bind to")
+	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 0, "Port to bind to")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -43,6 +48,13 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if dashboardHost != "" {
+		cfg.Dashboard.Host = dashboardHost
+	}
+	if dashboardPort != 0 {
+		cfg.Dashboard.Port = dashboardPort
 	}
 
 	url := fmt.Sprintf("http://%s:%d", cfg.Dashboard.Host, cfg.Dashboard.Port)
